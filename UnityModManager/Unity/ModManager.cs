@@ -12,16 +12,16 @@ namespace UnityModManagerNet
 {
     public partial class UnityModManager
     {
-        public const string version = "0.12.5";
+        public const string version = "0.12.7";
         public const string modsDirname = "Mods";
-        public const string infoFilename = "info.json";
+        public const string infoFilename = "Info.json";
         public const string patchTarget = "";
 
         public static Version unityVersion;
 
         private static Version mVersion = new Version();
 
-        public class Repository 
+        public class Repository
         {
             [Serializable]
             public class Release : IEquatable<Release>
@@ -104,7 +104,7 @@ namespace UnityModManagerNet
                         modEntry.Logger.Error(e.ToString());
                     }
                 }
-                
+
                 return t;
             }
         }
@@ -539,6 +539,8 @@ namespace UnityModManagerNet
             if (!Directory.Exists(modsPath))
                 Directory.CreateDirectory(modsPath);
 
+            Dictionary<string, ModEntry> mods = new Dictionary<string, ModEntry>();
+
             if (Directory.Exists(modsPath))
             {
                 Logger.Log($"Parsing mods.");
@@ -548,6 +550,7 @@ namespace UnityModManagerNet
                 foreach (string dir in Directory.GetDirectories(modsPath))
                 {
                     string jsonPath = Path.Combine(dir, infoFilename);
+                    if (!File.Exists(Path.Combine(dir, infoFilename))) jsonPath = Path.Combine(dir, infoFilename.ToLower());
                     if (File.Exists(jsonPath))
                     {
                         countMods++;
@@ -560,7 +563,7 @@ namespace UnityModManagerNet
                                 Logger.Error($"Id is null.");
                                 continue;
                             }
-                            if (modEntries.Exists(x => x.Info.Id == modInfo.Id))
+                            if (mods.ContainsKey(modInfo.Id))
                             {
                                 Logger.Error($"Id '{modInfo.Id}' already uses another mod.");
                                 continue;
@@ -569,7 +572,7 @@ namespace UnityModManagerNet
                                 modInfo.AssemblyName = modInfo.Id + ".dll";
 
                             ModEntry modEntry = new ModEntry(modInfo, dir + Path.DirectorySeparatorChar);
-                            modEntries.Add(modEntry);
+                            mods.Add(modInfo.Id, modEntry);
                         }
                         catch (Exception exception)
                         {
@@ -585,10 +588,10 @@ namespace UnityModManagerNet
 
                 mParams = Param.Load();
 
-                if (modEntries.Count > 0)
+                if (mods.Count > 0)
                 {
                     Logger.Log($"Sorting mods.");
-                    modEntries.Sort(Compare);
+                    TopoSort(mods);
 
                     Logger.Log($"Loading mods.");
                     foreach (var mod in modEntries)
@@ -610,19 +613,25 @@ namespace UnityModManagerNet
             isStarted = true;
         }
 
-        private static int Compare(ModEntry x, ModEntry y)
+        private static void DFS(string id, Dictionary<string, ModEntry> mods)
         {
-            if (x.Requirements.Count > 0 && x.Requirements.ContainsKey(y.Info.Id))
+            if (modEntries.Any(m => m.Info.Id == id))
             {
-                return 1;
+                return;
             }
-
-            if (y.Requirements.Count > 0 && y.Requirements.ContainsKey(x.Info.Id))
+            foreach (var req in mods[id].Requirements.Keys)
             {
-                return -1;
+                DFS(req, mods);
             }
+            modEntries.Add(mods[id]);
+        }
 
-            return String.Compare(x.Info.Id, y.Info.Id, StringComparison.Ordinal);
+        private static void TopoSort(Dictionary<string, ModEntry> mods)
+        {
+            foreach (var id in mods.Keys)
+            {
+                DFS(id, mods);
+            }
         }
 
         public static ModEntry FindMod(string id)
@@ -651,7 +660,7 @@ namespace UnityModManagerNet
         public static void SaveSettingsAndParams()
         {
             mParams.Save();
-            foreach(var mod in modEntries)
+            foreach (var mod in modEntries)
             {
                 if (mod.OnSaveGUI != null)
                     mod.OnSaveGUI(mod);
@@ -671,7 +680,7 @@ namespace UnityModManagerNet
 
             public int ShortcutKeyId = 0;
             public int CheckUpdates = 1;
-            public int ShowOnStart = 1; 
+            public int ShowOnStart = 1;
 
             public List<Mod> ModParams = new List<Mod>();
 
