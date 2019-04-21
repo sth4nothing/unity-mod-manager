@@ -9,7 +9,7 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>UnityModManagerNet.Installer</RootNamespace>
     <AssemblyName>UnityModManagerApp</AssemblyName>
-    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <TargetFrameworkProfile />
   </PropertyGroup>
@@ -22,6 +22,7 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -31,6 +32,7 @@
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <PropertyGroup>
     <ApplicationIcon>icon.ico</ApplicationIcon>
@@ -52,6 +54,7 @@
       <HintPath>..\lib\Newtonsoft.Json.dll</HintPath>
     </Reference>
     <Reference Include="System" />
+    <Reference Include="System.Data" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.XML" />
@@ -59,6 +62,12 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Config.cs" />
+    <Compile Include="DownloadForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="DownloadForm.Designer.cs">
+      <DependentUpon>DownloadForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="Form.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -77,6 +86,9 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Utils.cs" />
+    <EmbeddedResource Include="DownloadForm.resx">
+      <DependentUpon>DownloadForm.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Form.resx">
       <DependentUpon>Form.cs</DependentUpon>
     </EmbeddedResource>
@@ -90,6 +102,7 @@
       <DependentUpon>Resources.resx</DependentUpon>
       <DesignTime>True</DesignTime>
     </Compile>
+    <None Include="app.config" />
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>
@@ -117,6 +130,7 @@
     <PostBuildEvent>start XCOPY /Y /R "$(TargetPath)" "$(TargetDir)UnityModManager.exe*"
 start XCOPY /Y /R "$(SolutionDir)\lib\winhttp_x86.dll" "$(TargetDir)winhttp_x86.dll*"
 start XCOPY /Y /R "$(SolutionDir)\lib\winhttp_x64.dll" "$(TargetDir)winhttp_x64.dll*"
+start XCOPY /Y /R "$(SolutionDir)\lib\System.Xml.dll" "$(TargetDir)System.Xml.dll*"
 </PostBuildEvent>
   </PropertyGroup>
 </Project>

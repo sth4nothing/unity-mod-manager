@@ -62,7 +62,9 @@ namespace UnityModManagerNet.Installer
         public string EntryPoint;
         public string StartingPoint;
         public string UIStartingPoint;
+        public string GameVersionPoint;
         public string OldPatchTarget;
+        public string Additionally;
         //public string MachineConfig;
 
         public override string ToString()

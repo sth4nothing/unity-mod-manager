@@ -8,56 +8,56 @@ using Harmony12;
 
 namespace UnityModManagerNet
 {
-    [ComVisible(true)]
-    public class RngWrapper : RandomNumberGenerator
-    {
-        readonly RNGCryptoServiceProvider _wrapped;
+    //[ComVisible(true)]
+    //public class RngWrapper : RandomNumberGenerator
+    //{
+    //    readonly RNGCryptoServiceProvider _wrapped;
 
-        static RngWrapper()
-        {
-            Injector.Run();
-        }
+    //    static RngWrapper()
+    //    {
+    //        Injector.Run();
+    //    }
 
-        public RngWrapper()
-        {
-            this._wrapped = new RNGCryptoServiceProvider();
-        }
+    //    public RngWrapper()
+    //    {
+    //        this._wrapped = new RNGCryptoServiceProvider();
+    //    }
 
-        public RngWrapper(string str)
-        {
-            this._wrapped = new RNGCryptoServiceProvider(str);
-        }
+    //    public RngWrapper(string str)
+    //    {
+    //        this._wrapped = new RNGCryptoServiceProvider(str);
+    //    }
 
-        public RngWrapper(byte[] rgb)
-        {
-            this._wrapped = new RNGCryptoServiceProvider(rgb);
-        }
+    //    public RngWrapper(byte[] rgb)
+    //    {
+    //        this._wrapped = new RNGCryptoServiceProvider(rgb);
+    //    }
 
-        public RngWrapper(CspParameters cspParams)
-        {
-            this._wrapped = new RNGCryptoServiceProvider(cspParams);
-        }
+    //    public RngWrapper(CspParameters cspParams)
+    //    {
+    //        this._wrapped = new RNGCryptoServiceProvider(cspParams);
+    //    }
 
-        public override void GetBytes(byte[] data)
-        {
-            this._wrapped.GetBytes(data);
-        }
+    //    public override void GetBytes(byte[] data)
+    //    {
+    //        this._wrapped.GetBytes(data);
+    //    }
 
-        public override void GetNonZeroBytes(byte[] data)
-        {
-            this._wrapped.GetNonZeroBytes(data);
-        }
-    }
+    //    public override void GetNonZeroBytes(byte[] data)
+    //    {
+    //        this._wrapped.GetNonZeroBytes(data);
+    //    }
+    //}
 
     public class Injector
     {
         static bool usePrefix = false;
 
-        public static void Run()
+        public static void Run(bool doorstop = false)
         {
             try
             {
-                _Run();
+                _Run(doorstop);
             }
             catch (Exception e)
             {
@@ -66,7 +66,7 @@ namespace UnityModManagerNet
             }
         }
 
-        private static void _Run()
+        private static void _Run(bool doorstop)
         {
             Console.WriteLine();
             Console.WriteLine();
@@ -81,20 +81,27 @@ namespace UnityModManagerNet
 
             if (!string.IsNullOrEmpty(UnityModManager.Config.StartingPoint))
             {
-                if (TryGetEntryPoint(UnityModManager.Config.StartingPoint, out var @class, out var method, out var place))
+                if (!doorstop && UnityModManager.Config.StartingPoint == UnityModManager.Config.EntryPoint)
                 {
-                    usePrefix = (place == "before");
-                    var harmony = HarmonyInstance.Create(nameof(UnityModManager));
-                    var prefix = typeof(Injector).GetMethod(nameof(Prefix_Start), BindingFlags.Static | BindingFlags.NonPublic);
-                    var postfix = typeof(Injector).GetMethod(nameof(Postfix_Start), BindingFlags.Static | BindingFlags.NonPublic);
-                    harmony.Patch(method, new HarmonyMethod(prefix), new HarmonyMethod(postfix));
-                    UnityModManager.Logger.Log("Injection successful.");
+                    UnityModManager.Start();
                 }
                 else
                 {
-                    UnityModManager.Logger.Log("Injection aborted.");
-                    UnityModManager.OpenUnityFileLog();
-                    return;
+                    if (TryGetEntryPoint(UnityModManager.Config.StartingPoint, out var @class, out var method, out var place))
+                    {
+                        usePrefix = (place == "before");
+                        var harmony = HarmonyInstance.Create(nameof(UnityModManager));
+                        var prefix = typeof(Injector).GetMethod(nameof(Prefix_Start), BindingFlags.Static | BindingFlags.NonPublic);
+                        var postfix = typeof(Injector).GetMethod(nameof(Postfix_Start), BindingFlags.Static | BindingFlags.NonPublic);
+                        harmony.Patch(method, new HarmonyMethod(prefix), new HarmonyMethod(postfix));
+                        UnityModManager.Logger.Log("Injection successful.");
+                    }
+                    else
+                    {
+                        UnityModManager.Logger.Log("Injection canceled.");
+                        UnityModManager.OpenUnityFileLog();
+                        return;
+                    }
                 }
             }
             else
@@ -102,28 +109,25 @@ namespace UnityModManagerNet
                 UnityModManager.Start();
             }
 
-            if (UnityModManager.Params.ShowOnStart == 1)
+            if (!string.IsNullOrEmpty(UnityModManager.Config.UIStartingPoint))
             {
-                if (!string.IsNullOrEmpty(UnityModManager.Config.UIStartingPoint))
+                if (TryGetEntryPoint(UnityModManager.Config.UIStartingPoint, out var @class, out var method, out var place))
                 {
-                    if (TryGetEntryPoint(UnityModManager.Config.UIStartingPoint, out var @class, out var method, out var place))
-                    {
-                        usePrefix = (place == "before");
-                        var harmony = HarmonyInstance.Create(nameof(UnityModManager));
-                        var prefix = typeof(Injector).GetMethod(nameof(Prefix_Show), BindingFlags.Static | BindingFlags.NonPublic);
-                        var postfix = typeof(Injector).GetMethod(nameof(Postfix_Show), BindingFlags.Static | BindingFlags.NonPublic);
-                        harmony.Patch(method, new HarmonyMethod(prefix), new HarmonyMethod(postfix));
-                    }
-                    else
-                    {
-                        UnityModManager.OpenUnityFileLog();
-                        return;
-                    }
+                    usePrefix = (place == "before");
+                    var harmony = HarmonyInstance.Create(nameof(UnityModManager));
+                    var prefix = typeof(Injector).GetMethod(nameof(Prefix_Show), BindingFlags.Static | BindingFlags.NonPublic);
+                    var postfix = typeof(Injector).GetMethod(nameof(Postfix_Show), BindingFlags.Static | BindingFlags.NonPublic);
+                    harmony.Patch(method, new HarmonyMethod(prefix), new HarmonyMethod(postfix));
                 }
-                else if (UnityModManager.UI.Instance)
+                else
                 {
-                    UnityModManager.UI.Instance.FirstLaunch();
+                    UnityModManager.OpenUnityFileLog();
+                    return;
                 }
+            }
+            else if (UnityModManager.UI.Instance)
+            {
+                UnityModManager.UI.Instance.FirstLaunch();
             }
         }
 
@@ -151,7 +155,7 @@ namespace UnityModManagerNet
                 UnityModManager.UI.Instance.FirstLaunch();
         }
 
-        static bool TryGetEntryPoint(string str, out Type foundClass, out MethodInfo foundMethod, out string insertionPlace)
+        internal static bool TryGetEntryPoint(string str, out Type foundClass, out MethodInfo foundMethod, out string insertionPlace)
         {
             foundClass = null;
             foundMethod = null;
@@ -174,7 +178,7 @@ namespace UnityModManagerNet
             return false;
         }
 
-        static bool TryGetEntryPoint(Assembly assembly, string str, out Type foundClass, out MethodInfo foundMethod, out string insertionPlace)
+        internal static bool TryGetEntryPoint(Assembly assembly, string str, out Type foundClass, out MethodInfo foundMethod, out string insertionPlace)
         {
             foundClass = null;
             foundMethod = null;
@@ -201,7 +205,7 @@ namespace UnityModManagerNet
             return true;
         }
 
-        public static bool TryParseEntryPoint(string str, out string assembly, out string @class, out string method, out string insertionPlace)
+        internal static bool TryParseEntryPoint(string str, out string assembly, out string @class, out string method, out string insertionPlace)
         {
             assembly = string.Empty;
             @class = string.Empty;

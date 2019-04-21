@@ -13,13 +13,27 @@ namespace UnityModManagerNet
 {
     public partial class UnityModManager
     {
+        private static readonly Version VER_0 = new Version();
         private static readonly Version VER_0_13 = new Version(0, 13);
 
+        /// <summary>
+        /// Contains version of UnityEngine
+        /// </summary>
         public static Version unityVersion { get; private set; }
 
+        /// <summary>
+        /// Contains version of a game, if configured [0.15.0]
+        /// </summary>
+        public static Version gameVersion { get; private set; } = new Version();
+
+        /// <summary>
+        /// Contains version of UMM
+        /// </summary>
         public static Version version { get; private set; } = typeof(UnityModManager).Assembly.GetName().Version;
 
         private static ModuleDefMD thisModuleDef = ModuleDefMD.Load(typeof(UnityModManager).Module);
+
+        private static bool forbidDisableMods;
 
         public class Repository
         {
@@ -79,7 +93,7 @@ namespace UnityModManagerNet
                 catch (Exception e)
                 {
                     modEntry.Logger.Error($"Can't save {filepath}.");
-                    Debug.LogException(e);
+                    modEntry.Logger.LogException(e);
                 }
             }
 
@@ -101,7 +115,7 @@ namespace UnityModManagerNet
                     catch (Exception e)
                     {
                         modEntry.Logger.Error($"Can't read {filepath}.");
-                        Debug.LogException(e);
+                        modEntry.Logger.LogException(e);
                     }
                 }
 
@@ -121,6 +135,8 @@ namespace UnityModManagerNet
 
             public string ManagerVersion;
 
+            public string GameVersion;
+
             public string[] Requirements;
 
             public string AssemblyName;
@@ -130,6 +146,12 @@ namespace UnityModManagerNet
             public string HomePage;
 
             public string Repository;
+
+            /// <summary>
+            /// Used for RoR2 game [0.17.0]
+            /// </summary>
+            [NonSerialized]
+            public bool IsCheat = true;
 
             public static implicit operator bool(ModInfo exists)
             {
@@ -160,27 +182,65 @@ namespace UnityModManagerNet
         {
             public readonly ModInfo Info;
 
+            /// <summary>
+            /// Path to mod folder
+            /// </summary>
             public readonly string Path;
 
             Assembly mAssembly = null;
             public Assembly Assembly => mAssembly;
 
+            /// <summary>
+            /// Version of a mod
+            /// </summary>
             public readonly Version Version = null;
 
+            /// <summary>
+            /// Required UMM version
+            /// </summary>
             public readonly Version ManagerVersion = null;
 
+            /// <summary>
+            /// Required game version [0.15.0]
+            /// </summary>
+            public readonly Version GameVersion = null;
+
+            /// <summary>
+            /// Not used
+            /// </summary>
             public Version NewestVersion;
 
+            /// <summary>
+            /// Required mods
+            /// </summary>
             public readonly Dictionary<string, Version> Requirements = new Dictionary<string, Version>();
+
+            /// <summary>
+            /// Displayed in UMM UI. Add <color></color> tag to change colors. Can be used when custom verification game version [0.15.0]
+            /// </summary>
+            public string CustomRequirements = String.Empty;
 
             public readonly ModLogger Logger = null;
 
+            /// <summary>
+            /// Not used
+            /// </summary>
             public bool HasUpdate = false;
 
             //public ModSettings Settings = null;
 
             /// <summary>
-            /// Called to activate / deactivate the mod.
+            /// Show button to reload the mod [0.14.0]
+            /// </summary>
+            public bool CanReload { get; private set; }
+
+            /// <summary>
+            /// Called to unload old data for reloading mod [0.14.0]
+            /// </summary>
+            public Func<ModEntry, bool> OnUnload = null;
+
+            /// <summary>
+            /// Called to activate / deactivate the mod
             /// </summary>
             public Func<ModEntry, bool, bool> OnToggle = null;
 
@@ -190,25 +250,32 @@ namespace UnityModManagerNet
             public Action<ModEntry> OnGUI = null;
 
             /// <summary>
-            /// Called when the UMM UI closes.
+            /// Called when opening mod GUI [0.16.0]
+            /// </summary>
+            public Action<ModEntry> OnShowGUI = null;
+
+            /// <summary>
+            /// Called when closing mod GUI [0.16.0]
+            /// </summary>
+            public Action<ModEntry> OnHideGUI = null;
+
+            /// <summary>
+            /// Called when the game closes
             /// </summary>
             public Action<ModEntry> OnSaveGUI = null;
 
             /// <summary>
-            /// Called by MonoBehaviour.Update
-            /// Added in 0.13.0
+            /// Called by MonoBehaviour.Update [0.13.0]
             /// </summary>
             public Action<ModEntry, float> OnUpdate = null;
 
             /// <summary>
-            /// Called by MonoBehaviour.LateUpdate
-            /// Added in 0.13.0
+            /// Called by MonoBehaviour.LateUpdate [0.13.0]
             /// </summary>
             public Action<ModEntry, float> OnLateUpdate = null;
 
             /// <summary>
-            /// Called by MonoBehaviour.FixedUpdate
-            /// Added in 0.13.0
+            /// Called by MonoBehaviour.FixedUpdate [0.13.0]
             /// </summary>
             public Action<ModEntry, float> OnFixedUpdate = null;
 
@@ -220,10 +287,23 @@ namespace UnityModManagerNet
             bool mErrorOnLoading = false;
             public bool ErrorOnLoading => mErrorOnLoading;
 
+            /// <summary>
+            /// UI checkbox
+            /// </summary>
             public bool Enabled = true;
             //public bool Enabled => Enabled;
 
+            /// <summary>
+            /// If OnToggle exists
+            /// </summary>
             public bool Toggleable => OnToggle != null;
+
+            /// <summary>
+            /// If Assembly is loaded [0.13.1]
+            /// </summary>
+            public bool Loaded => Assembly != null;
+
+            bool mFirstLoading = true;
 
             bool mActive = false;
             public bool Active
@@ -231,6 +311,14 @@ namespace UnityModManagerNet
                 get => mActive;
                 set
                 {
+                    if (value && !Loaded)
+                    {
+                        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                        Load();
+                        Logger.NativeLog($"Loading time {(stopwatch.ElapsedMilliseconds / 1000f):f2} s.");
+                        return;
+                    }
+
                     if (!mStarted || mErrorOnLoading)
                         return;
 
@@ -245,13 +333,14 @@ namespace UnityModManagerNet
                             {
                                 mActive = true;
                                 this.Logger.Log($"Active.");
+                                GameScripts.OnModToggle(this, true);
                             }
                             else
                             {
                                 this.Logger.Log($"Unsuccessfully.");
                             }
                         }
-                        else
+                        else if (!forbidDisableMods)
                         {
                             if (!mActive)
                                 return;
@@ -260,13 +349,13 @@ namespace UnityModManagerNet
                             {
                                 mActive = false;
                                 this.Logger.Log($"Inactive.");
+                                GameScripts.OnModToggle(this, false);
                             }
                         }
                     }
                     catch (Exception e)
                     {
-                        this.Logger.Error("OnToggle: " + e.GetType().Name + " - " + e.Message);
-                        Debug.LogException(e);
+                        this.Logger.LogException("OnToggle", e);
                     }
                 }
             }
@@ -278,6 +367,7 @@ namespace UnityModManagerNet
                 Logger = new ModLogger(Info.Id);
                 Version = ParseVersion(info.Version);
                 ManagerVersion = !string.IsNullOrEmpty(info.ManagerVersion) ? ParseVersion(info.ManagerVersion) : new Version();
+                GameVersion = !string.IsNullOrEmpty(info.GameVersion) ? ParseVersion(info.GameVersion) : new Version();
 
                 if (info.Requirements != null && info.Requirements.Length > 0)
                 {
@@ -298,13 +388,8 @@ namespace UnityModManagerNet
 
             public bool Load()
             {
-                if (mStarted)
-                {
-                    if (mErrorOnLoading)
-                        return false;
-
-                    return true;
-                }
+                if (Loaded)
+                    return !mErrorOnLoading;
 
                 mErrorOnLoading = false;
 
@@ -330,33 +415,40 @@ namespace UnityModManagerNet
                     }
                 }
 
+                if (!string.IsNullOrEmpty(Info.GameVersion))
+                {
+                    if (gameVersion != VER_0 && GameVersion > gameVersion)
+                    {
+                        mErrorOnLoading = true;
+                        this.Logger.Error($"Game must be version '{Info.GameVersion}' or higher.");
+                    }
+                }
+
                 if (Requirements.Count > 0)
                 {
                     foreach (var item in Requirements)
                     {
                         var id = item.Key;
                         var mod = FindMod(id);
-                        if (mod == null || mod.Assembly == null)
+                        if (mod == null)
                         {
                             mErrorOnLoading = true;
-                            this.Logger.Error($"Required mod '{id}' not loaded.");
+                            this.Logger.Error($"Required mod '{id}' missing.");
+                            continue;
                         }
-                        //else if (!mod.Enabled)
-                        //{
-                        //    mErrorOnLoading = true;
-                        //    this.Logger.Error($"Required mod '{id}' disabled.");
-                        //}
-                        else if (!mod.Active)
+                        else if (item.Value != null && item.Value > mod.Version)
                         {
-                            this.Logger.Log($"Required mod '{id}' inactive.");
+                            mErrorOnLoading = true;
+                            this.Logger.Error($"Required mod '{id}' must be version '{item.Value}' or higher.");
+                            continue;
                         }
-                        else if (item.Value != null)
+
+                        if (!mod.Active)
                         {
-                            if (item.Value > mod.Version)
-                            {
-                                mErrorOnLoading = true;
-                                this.Logger.Error($"Required mod '{id}' must be version '{item.Value}' or higher.");
-                            }
+                            mod.Enabled = true;
+                            mod.Active = true;
+                            if (!mod.Active)
+                                this.Logger.Log($"Required mod '{id}' inactive.");
                         }
                     }
                 }
@@ -370,21 +462,17 @@ namespace UnityModManagerNet
                 {
                     try
                     {
-                        if (ManagerVersion >= VER_0_13)
-                        {
-                            mAssembly = Assembly.LoadFile(assemblyPath);
-                        }
-                        else
+                        var assemblyCachePath = assemblyPath;
+                        var cacheExists = false;
+
+                        if (mFirstLoading)
                         {
                             var fi = new FileInfo(assemblyPath);
-                            var hash = (uint)((long)fi.LastWriteTimeUtc.GetHashCode() + version.GetHashCode()).GetHashCode();
-                            var assemblyCachePath = System.IO.Path.Combine(Path, Info.AssemblyName + $".{hash}.cache");
+                            var hash = (ushort)((long)fi.LastWriteTimeUtc.GetHashCode() + version.GetHashCode() + ManagerVersion.GetHashCode()).GetHashCode();
+                            assemblyCachePath = assemblyPath + $".{hash}.cache";
+                            cacheExists = File.Exists(assemblyCachePath);
 
-                            if (File.Exists(assemblyCachePath))
-                            {
-                                mAssembly = Assembly.LoadFile(assemblyCachePath);
-                            }
-                            else
+                            if (!cacheExists)
                             {
                                 foreach (var filepath in Directory.GetFiles(Path, "*.cache"))
                                 {
@@ -396,18 +484,50 @@ namespace UnityModManagerNet
                                     {
                                     }
                                 }
-                                //var asmDef = AssemblyDefinition.ReadAssembly(assemblyPath);
-                                //var modDef = asmDef.MainModule;
-                                //if (modDef.TryGetTypeReference("UnityModManagerNet.UnityModManager", out var typeRef))
-                                //{
-                                //    var managerAsmRef = new AssemblyNameReference("UnityModManager", version);
-                                //    if (typeRef.Scope is AssemblyNameReference asmNameRef)
-                                //    {
-                                //        typeRef.Scope = managerAsmRef;
-                                //        modDef.AssemblyReferences.Add(managerAsmRef);
-                                //        asmDef.Write(assemblyCachePath);
-                                //    }
-                                //}
+                            }
+                        }
+
+                        if (ManagerVersion >= VER_0_13)
+                        {
+                            if (mFirstLoading)
+                            {
+                                if (!cacheExists)
+                                {
+                                    File.Copy(assemblyPath, assemblyCachePath, true);
+                                }
+                                mAssembly = Assembly.LoadFile(assemblyCachePath);
+                                //mAssembly = Assembly.LoadFile(assemblyPath);
+
+                                foreach (var type in mAssembly.GetTypes())
+                                {
+                                    if (type.GetCustomAttributes(typeof(EnableReloadingAttribute), true).Any())
+                                    {
+                                        CanReload = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                mAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+                            }
+                        }
+                        else
+                        {
+                            //var asmDef = AssemblyDefinition.ReadAssembly(assemblyPath);
+                            //var modDef = asmDef.MainModule;
+                            //if (modDef.TryGetTypeReference("UnityModManagerNet.UnityModManager", out var typeRef))
+                            //{
+                            //    var managerAsmRef = new AssemblyNameReference("UnityModManager", version);
+                            //    if (typeRef.Scope is AssemblyNameReference asmNameRef)
+                            //    {
+                            //        typeRef.Scope = managerAsmRef;
+                            //        modDef.AssemblyReferences.Add(managerAsmRef);
+                            //        asmDef.Write(assemblyCachePath);
+                            //    }
+                            //}
+                            if (!cacheExists)
+                            {
                                 var modDef = ModuleDefMD.Load(File.ReadAllBytes(assemblyPath));
                                 foreach (var item in modDef.GetTypeRefs())
                                 {
@@ -417,15 +537,17 @@ namespace UnityModManagerNet
                                     }
                                 }
                                 modDef.Write(assemblyCachePath);
-                                mAssembly = Assembly.LoadFile(assemblyCachePath);
                             }
+                            mAssembly = Assembly.LoadFile(assemblyCachePath);
                         }
+
+                        mFirstLoading = false;
                     }
                     catch (Exception exception)
                     {
                         mErrorOnLoading = true;
                         this.Logger.Error($"Error loading file '{assemblyPath}'.");
-                        Debug.LogException(exception);
+                        this.Logger.LogException(exception);
                         return false;
                     }
 
@@ -454,7 +576,7 @@ namespace UnityModManagerNet
 
                     mStarted = true;
 
-                    if (!mErrorOnLoading && Enabled)
+                    if (!mErrorOnLoading)
                     {
                         Active = true;
                         return true;
@@ -467,6 +589,131 @@ namespace UnityModManagerNet
                 }
 
                 return false;
+            }
+
+            internal void Reload()
+            {
+                if (!mStarted || !CanReload)
+                    return;
+
+                try
+                {
+                    string assemblyPath = System.IO.Path.Combine(Path, Info.AssemblyName);
+                    var reflAssembly = Assembly.ReflectionOnlyLoad(File.ReadAllBytes(assemblyPath));
+                    if (reflAssembly.GetName().Version == Assembly.GetName().Version)
+                    {
+                        this.Logger.Log("Reload is not needed. The version is exactly the same as the previous one.");
+                        return;
+                    }
+                }
+                catch (Exception e)
+                {
+                    this.Logger.Error(e.ToString());
+                    return;
+                }
+
+                if (OnSaveGUI != null)
+                    OnSaveGUI.Invoke(this);
+
+                this.Logger.Log("Reloading...");
+
+                if (Toggleable)
+                {
+                    var b = forbidDisableMods;
+                    forbidDisableMods = false;
+                    Active = false;
+                    forbidDisableMods = b;
+                }
+                else
+                {
+                    mActive = false;
+                }
+                
+                try
+                {
+                    if (!Active && (OnUnload == null || OnUnload.Invoke(this)))
+                    {
+                        mCache.Clear();
+                        typeof(Harmony12.Traverse).GetField("Cache", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, new Harmony12.AccessCache());
+                        typeof(Harmony.Traverse).GetField("Cache", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, new Harmony.AccessCache());
+
+                        var oldAssembly = Assembly;
+                        mAssembly = null;
+                        mStarted = false;
+                        mErrorOnLoading = false;
+
+                        OnToggle = null;
+                        OnGUI = null;
+                        OnShowGUI = null;
+                        OnHideGUI = null;
+                        OnSaveGUI = null;
+                        OnUnload = null;
+                        OnUpdate = null;
+                        OnFixedUpdate = null;
+                        OnLateUpdate = null;
+                        CustomRequirements = null;
+
+                        if (Load())
+                        {
+                            var allTypes = oldAssembly.GetTypes();
+                            foreach (var type in allTypes)
+                            {
+                                var t = Assembly.GetType(type.FullName);
+                                if (t != null)
+                                {
+                                    foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                                    {
+                                        if (field.GetCustomAttributes(typeof(SaveOnReloadAttribute), true).Any())
+                                        {
+                                            var f = t.GetField(field.Name);
+                                            if (f != null)
+                                            {
+                                                this.Logger.Log($"Copying field '{field.DeclaringType.Name}.{field.Name}'");
+                                                try
+                                                {
+                                                    if (field.FieldType != f.FieldType)
+                                                    {
+                                                        if (field.FieldType.IsEnum && f.FieldType.IsEnum)
+                                                        {
+                                                            f.SetValue(null, Convert.ToInt32(field.GetValue(null)));
+                                                        }
+                                                        else if (field.FieldType.IsClass && f.FieldType.IsClass)
+                                                        {
+                                                            //f.SetValue(null, Convert.ChangeType(field.GetValue(null), f.FieldType));
+                                                        }
+                                                        else if (field.FieldType.IsValueType && f.FieldType.IsValueType)
+                                                        {
+                                                            //f.SetValue(null, Convert.ChangeType(field.GetValue(null), f.FieldType));
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        f.SetValue(null, field.GetValue(null));
+                                                    }
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    this.Logger.Error(ex.ToString());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    else if (Active)
+                    {
+                        this.Logger.Log("Must be deactivated.");
+                    }
+                }
+                catch (Exception e)
+                {
+                    this.Logger.Error(e.ToString());
+                }
+
+                this.Logger.Log("Reloading canceled.");
             }
 
             public bool Invoke(string namespaceClassnameMethodname, out object result, object[] param = null, Type[] types = null)
@@ -484,8 +731,7 @@ namespace UnityModManagerNet
                 catch (Exception exception)
                 {
                     this.Logger.Error($"Error trying to call '{namespaceClassnameMethodname}'.");
-                    this.Logger.Error($"{exception.GetType().Name} - {exception.Message}");
-                    Debug.LogException(exception);
+                    this.Logger.LogException(exception);
                 }
 
                 return false;
@@ -583,7 +829,7 @@ namespace UnityModManagerNet
             if (args.LoadedAssembly.FullName == "Assembly-CSharp, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null")
             {
                 AppDomain.CurrentDomain.AssemblyLoad -= OnLoad;
-                Injector.Run();
+                Injector.Run(true);
             }
         }
 
@@ -596,7 +842,11 @@ namespace UnityModManagerNet
 
             Logger.Clear();
 
-            Logger.Log($"Initialize. Version '{version}'.");
+            Logger.Log($"Initialize.");
+            Logger.Log($"Version: '{version}'.");
+            Logger.Log($"OS: {Environment.OSVersion} {Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")}.");
+
+            unityVersion = ParseVersion(Application.unityVersion);
 
             Config = GameInfo.Load();
             if (Config == null)
@@ -604,12 +854,14 @@ namespace UnityModManagerNet
                 return false;
             }
 
+            Logger.Log($"Game: {Config.Name}.");
+
+            Params = Param.Load();
+
             modsPath = Path.Combine(Environment.CurrentDirectory, Config.ModsDirectory);
 
             if (!Directory.Exists(modsPath))
                 Directory.CreateDirectory(modsPath);
-
-            unityVersion = ParseVersion(Application.unityVersion);
 
             //SceneManager.sceneLoaded += SceneManager_sceneLoaded; // Incompatible with Unity5
 
@@ -683,6 +935,57 @@ namespace UnityModManagerNet
 
             started = true;
 
+            if (!string.IsNullOrEmpty(Config.GameVersionPoint))
+            {
+                try
+                {
+                    Logger.Log($"Start parsing game version.");
+                    if (Injector.TryParseEntryPoint(Config.GameVersionPoint, out var assembly, out var className, out var methodName, out _))
+                    {
+                        var asm = Assembly.Load(assembly);
+                        if (asm == null)
+                        {
+                            Logger.Error($"File '{assembly}' not found.");
+                            goto Next;
+                        }
+                        var foundClass = asm.GetType(className);
+                        if (foundClass == null)
+                        {
+                            Logger.Error($"Class '{className}' not found.");
+                            goto Next;
+                        }
+                        var foundMethod = foundClass.GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                        if (foundMethod == null)
+                        {
+                            var foundField = foundClass.GetField(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                            if (foundField != null)
+                            {
+                                gameVersion = ParseVersion(foundField.GetValue(null).ToString());
+                                Logger.Log($"Game version detected as '{gameVersion}'.");
+                                goto Next;
+                            }
+
+                            UnityModManager.Logger.Error($"Method '{methodName}' not found.");
+                            goto Next;
+                        }
+
+                        gameVersion = ParseVersion(foundMethod.Invoke(null, null).ToString());
+                        Logger.Log($"Game version detected as '{gameVersion}'.");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e);
+                    OpenUnityFileLog();
+                }
+            }
+
+            Next:
+
+            GameScripts.Init();
+
+            GameScripts.OnBeforeLoadMods();
+
             if (Directory.Exists(modsPath))
             {
                 Logger.Log($"Parsing mods.");
@@ -733,26 +1036,33 @@ namespace UnityModManagerNet
                     }
                 }
 
-                Params = Param.Load();
-
                 if (mods.Count > 0)
                 {
                     Logger.Log($"Sorting mods.");
                     TopoSort(mods);
-                    
+
+                    Params.ReadModParams();
+
                     Logger.Log($"Loading mods.");
                     foreach (var mod in modEntries)
                     {
-                        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-                        mod.Load();
-                        mod.Logger.NativeLog($"Loading time {(stopwatch.ElapsedMilliseconds / 1000f):f2} s.");
+                        if (!mod.Enabled)
+                        {
+                            mod.Logger.Log("To skip (disabled).");
+                        }
+                        else
+                        {
+                            mod.Active = true;
+                        }
                     }
                 }
 
-                Logger.Log($"Finish. Found {countMods} mods. Successful loaded {modEntries.Count(x => !x.ErrorOnLoading)} mods.".ToUpper());
+                Logger.Log($"Finish. Successful loaded {modEntries.Count(x => !x.ErrorOnLoading)}/{countMods} mods.".ToUpper());
                 Console.WriteLine();
                 Console.WriteLine();
             }
+
+            GameScripts.OnAfterLoadMods();
 
             if (!UI.Load())
             {
@@ -804,11 +1114,26 @@ namespace UnityModManagerNet
                     }
                     catch (Exception e)
                     {
-                        mod.Logger.Error("OnSaveGUI: " + e.GetType().Name + " - " + e.Message);
-                        Debug.LogException(e);
+                        mod.Logger.LogException("OnSaveGUI", e);
                     }
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Copies a value from an old assembly to a new one [0.14.0]
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Field)]
+    public class SaveOnReloadAttribute : Attribute
+    {
+    }
+
+    /// <summary>
+    /// Allows reloading [0.14.1]
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class)]
+    public class EnableReloadingAttribute : Attribute
+    {
     }
 }

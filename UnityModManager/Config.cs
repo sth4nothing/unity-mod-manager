@@ -24,6 +24,7 @@ namespace UnityModManagerNet
             public int ShowOnStart = 1;
             public float WindowWidth;
             public float WindowHeight;
+            public float UIScale = 1f;
 
             public List<Mod> ModParams = new List<Mod>();
 
@@ -61,14 +62,7 @@ namespace UnityModManagerNet
                         {
                             var serializer = new XmlSerializer(typeof(Param));
                             var result = serializer.Deserialize(stream) as Param;
-                            foreach (var item in result.ModParams)
-                            {
-                                var mod = FindMod(item.Id);
-                                if (mod != null)
-                                {
-                                    mod.Enabled = item.Enabled;
-                                }
-                            }
+                            
                             return result;
                         }
                     }
@@ -79,6 +73,18 @@ namespace UnityModManagerNet
                     }
                 }
                 return new Param();
+            }
+
+            internal void ReadModParams()
+            {
+                foreach (var item in ModParams)
+                {
+                    var mod = FindMod(item.Id);
+                    if (mod != null)
+                    {
+                        mod.Enabled = item.Enabled;
+                    }
+                }
             }
         }
 
@@ -94,6 +100,7 @@ namespace UnityModManagerNet
             public string StartingPoint;
             public string UIStartingPoint;
             public string GameExe;
+            public string GameVersionPoint;
 
             static readonly string filepath = Path.Combine(Path.GetDirectoryName(typeof(GameInfo).Assembly.Location), "Config.xml");
 

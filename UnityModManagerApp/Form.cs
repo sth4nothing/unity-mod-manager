@@ -10,6 +10,7 @@ using System.Diagnostics;
 
 namespace UnityModManagerNet.Installer
 {
+    [Serializable]
     public partial class UnityModManagerForm : Form
     {
         const string REG_PATH = @"HKEY_CURRENT_USER\Software\UnityModManager";
@@ -26,7 +27,9 @@ namespace UnityModManagerNet.Installer
             "0Harmony12.dll",
             "0Harmony-1.2.dll",
             "dnlib.dll",
-            nameof(UnityModManager) + ".dll"
+            "System.Xml.dll",
+            nameof(UnityModManager) + ".dll",
+            nameof(UnityModManager) + ".xml"
         };
 
         static string[] libraryPaths;
@@ -163,6 +166,7 @@ namespace UnityModManagerNet.Installer
             btnRestore.Enabled = false;
             tabControl.TabPages[1].Enabled = false;
             installedVersion.Text = "-";
+            additionallyGroupBox.Visible = false;
 
             foreach (var ctrl in installTypeGroup.Controls)
             {
@@ -186,7 +190,9 @@ namespace UnityModManagerNet.Installer
                 nameof(GameInfo.GameExe),
                 nameof(GameInfo.StartingPoint),
                 nameof(GameInfo.UIStartingPoint),
-                nameof(GameInfo.OldPatchTarget)
+                nameof(GameInfo.OldPatchTarget),
+                nameof(GameInfo.GameVersionPoint),
+                nameof(GameInfo.Additionally)
             };
 
             var prefix = (!string.IsNullOrEmpty(gameInfo.Name) ? $"[{gameInfo.Name}]" : "[?]");
@@ -246,6 +252,7 @@ namespace UnityModManagerNet.Installer
 
             btnInstall.Text = "Install";
             btnRestore.Enabled = false;
+            additionallyGroupBox.Visible = false;
 
             gamePath = "";
             if (string.IsNullOrEmpty(selectedGameParams.Path) || !Directory.Exists(selectedGameParams.Path))
@@ -260,8 +267,15 @@ namespace UnityModManagerNet.Installer
                     Log.Print($"Game folder '{selectedGame.Folder}' not found.");
                     return;
                 }
-                Log.Print($"Game folder detected as '{result}'.");
+                Log.Print($"Game path detected as '{result}'.");
                 selectedGameParams.Path = result;
+            }
+
+            if (!Utils.IsUnixPlatform() && !Directory.GetFiles(selectedGameParams.Path, "*.exe", SearchOption.TopDirectoryOnly).Any())
+            {
+                InactiveForm();
+                Log.Print("Select the game folder where an exe file is located.");
+                return;
             }
 
             Utils.TryParseEntryPoint(selectedGame.EntryPoint, out var assemblyName);
@@ -290,6 +304,21 @@ namespace UnityModManagerNet.Installer
             for (int i = 0; i < libraryFiles.Length; i++)
             {
                 libraryPaths[i] = Path.Combine(managerPath, libraryFiles[i]);
+            }
+
+            var parent = new DirectoryInfo(Application.StartupPath).Parent;
+            for(int i = 0; i < 3; i++)
+            {
+                if (parent == null)
+                    break;
+
+                if (parent.FullName == gamePath)
+                {
+                    InactiveForm();
+                    Log.Print("UMM Installer should not be located in the game folder.");
+                    return;
+                }
+                parent = parent.Parent;
             }
 
             //machineConfigPath = string.Empty;
@@ -488,7 +517,24 @@ namespace UnityModManagerNet.Installer
                 btnInstall.Enabled = true;
                 btnRemove.Enabled = false;
             }
+
+            if (!string.IsNullOrEmpty(selectedGame.Additionally))
+            {
+                notesTextBox.Text = selectedGame.Additionally;
+                additionallyGroupBox.Visible = true;
+            }
         }
+
+        //private void btnRunGame_SizeChanged(object sender, EventArgs e)
+        //{
+        //    var btn = sender as Button;
+        //    btn.Location = new System.Drawing.Point((int)(btn.Parent.Size.Width / 2f - btn.Size.Width / 2f), btn.Location.Y);
+        //}
+
+        //private void btnRunGame_Click(object sender, EventArgs e)
+        //{
+            //Process.Start(gameExePath);
+        //}
 
         private string FindGameFolder(string str)
         {
@@ -662,6 +708,8 @@ namespace UnityModManagerNet.Installer
                 Log.Print($"Game changed to '{selected.Name}'.");
                 param.LastSelectedGame = selected.Name;
                 selectedGameParams = param.GetGameParam(selected);
+                if (!string.IsNullOrEmpty(selectedGameParams.Path))
+                    Log.Print($"Game path '{selectedGameParams.Path}'.");
             }
 
             RefreshForm();
@@ -1214,7 +1262,7 @@ namespace UnityModManagerNet.Installer
                         if (dest.LastWriteTimeUtc == source.LastWriteTimeUtc)
                             continue;
 
-                        File.Copy(path, $"{path}.old_", true);
+                        //File.Copy(path, $"{path}.old_", true);
                     }
 
                     Log.Print($"  {filename}");
@@ -1266,6 +1314,11 @@ namespace UnityModManagerNet.Installer
                         CheckModUpdates();
                     break;
             }
+        }
+
+        private void notesTextBox_LinkClicked(object sender, LinkClickedEventArgs e)
+        {
+            Process.Start(e.LinkText);
         }
     }
 }
