@@ -5,7 +5,7 @@ using System.Reflection;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
-using Harmony12;
+using HarmonyLib;
 
 namespace UnityModManagerNet
 {
@@ -68,6 +68,8 @@ namespace UnityModManagerNet
 
             private void Awake()
             {
+                Logger.Log("Spawning.");
+
                 mInstance = this;
                 DontDestroyOnLoad(this);
                 mWindowSize = ClampWindowSize(new Vector2(Params.WindowWidth, Params.WindowHeight));
@@ -75,7 +77,8 @@ namespace UnityModManagerNet
                 mUIScale = Mathf.Clamp(Params.UIScale, 0.5f, 2f);
                 mExpectedUIScale = mUIScale;
                 Textures.Init();
-                var harmony = HarmonyInstance.Create("UnityModManager.UI");
+
+                var harmony = new HarmonyLib.Harmony("UnityModManager.UI");
                 var original = typeof(Screen).GetMethod("set_lockCursor");
                 var prefix = typeof(Screen_lockCursor_Patch).GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
                 harmony.Patch(original, new HarmonyMethod(prefix));
@@ -96,6 +99,7 @@ namespace UnityModManagerNet
 
             private void OnDestroy()
             {
+                Logger.Log("Destroying when exit.");
                 SaveSettingsAndParams();
                 Logger.WriteBuffers();
             }
@@ -106,6 +110,15 @@ namespace UnityModManagerNet
                 {
                     Cursor.lockState = CursorLockMode.None;
                     Cursor.visible = true;
+                }
+
+                try
+                {
+                    KeyBinding.BindKeyboard();
+                }
+                catch (Exception e)
+                {
+                    Logger.LogException("BindKeyboard", e);
                 }
 
                 var deltaTime = Time.deltaTime;
@@ -124,42 +137,12 @@ namespace UnityModManagerNet
                     }
                 }
 
-                bool toggle = false;
-                
-                switch (Params.ShortcutKeyId)
-                {
-                    default:
-                        if (Input.GetKeyUp(KeyCode.F10) && (Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.LeftControl)))
-                        {
-                            toggle = true;
-                        }
-                        break;
-                    case 1:
-                        if (Input.GetKeyUp(KeyCode.ScrollLock))
-                        {
-                            toggle = true;
-                        }
-                        break;
-                    case 2:
-                        if (Input.GetKeyUp(KeyCode.KeypadMultiply))
-                        {
-                            toggle = true;
-                        }
-                        break;
-                    case 3:
-                        if (Input.GetKeyUp(KeyCode.BackQuote))
-                        {
-                            toggle = true;
-                        }
-                        break;
-                }
-
-                if (toggle)
+                if (Params.Hotkey.Up() || Param.DefaultHotkey.Up())
                 {
                     ToggleWindow();
                 }
 
-                if (mOpened && Input.GetKey(KeyCode.Escape))
+                if (mOpened && Param.EscapeHotkey.Up())
                 {
                     ToggleWindow();
                 }
@@ -251,6 +234,7 @@ namespace UnityModManagerNet
             private void ScaleGUI()
             {
                 GUI.skin.font = Font.CreateDynamicFontFromOSFont(new[] { "Arial" }, Scale(globalFontSize));
+                GUI.skin.label.clipping = TextClipping.Overflow;
                 GUI.skin.button.padding = new RectOffset(Scale(10), Scale(10), Scale(3), Scale(3));
                 //GUI.skin.button.margin = RectOffset(Scale(4), Scale(2));
 
@@ -341,6 +325,21 @@ namespace UnityModManagerNet
                     GUI.backgroundColor = backgroundColor;
                     GUI.color = color;
                 }
+
+                foreach (var mod in modEntries)
+                {
+                    if (mod.Active && mod.OnFixedGUI != null)
+                    {
+                        try
+                        {
+                            mod.OnFixedGUI.Invoke(mod);
+                        }
+                        catch (Exception e)
+                        {
+                            mod.Logger.LogException("OnFixedGUI", e);
+                        }
+                    }
+                }
             }
 
             public int tabId = 0;
@@ -380,6 +379,9 @@ namespace UnityModManagerNet
                             {
                                 mod.OnHideGUI(mod);
                             }
+                            catch (ExitGUIException)
+                            {
+                            }
                             catch (Exception ex)
                             {
                                 mod.Logger.LogException("OnHideGUI", ex);
@@ -394,6 +396,9 @@ namespace UnityModManagerNet
                             try
                             {
                                 mod.OnShowGUI(mod);
+                            }
+                            catch (ExitGUIException)
+                            {
                             }
                             catch (Exception ex)
                             {
@@ -450,8 +455,9 @@ namespace UnityModManagerNet
 
             private void WindowFunction(int windowId)
             {
-                if (Input.GetKey(KeyCode.LeftControl))
-                    GUI.DragWindow(mWindowRect);
+                if (KeyBinding.Ctrl())
+                    GUI.DragWindow(new Rect(0, 0, 10000, 10000));
+                GUI.DragWindow(new Rect(0, 0, 10000, 20));
 
                 UnityAction buttons = () => { };
 
@@ -488,6 +494,8 @@ namespace UnityModManagerNet
                 buttons();
                 GUILayout.EndHorizontal();
             }
+
+            static List<string> mJoinList = new List<string>();
 
             private void DrawTab(int tabId, ref UnityAction buttons)
             {
@@ -583,12 +591,16 @@ namespace UnityModManagerNet
                                 }
                                 else if (mods[i].Requirements.Count > 0)
                                 {
+                                    GUILayout.BeginHorizontal(colWidth[++col]);
+                                    mJoinList.Clear();
                                     foreach (var item in mods[i].Requirements)
                                     {
                                         var id = item.Key;
                                         var mod = FindMod(id);
-                                        GUILayout.Label(((mod == null || item.Value != null && item.Value > mod.Version || !mod.Active) && mods[i].Active) ? "<color=\"#CD5C5C\">" + id + "</color>" : id, colWidth[++col]);
+                                        mJoinList.Add(((mod == null || item.Value != null && item.Value > mod.Version || !mod.Active) && mods[i].Active) ? "<color=\"#CD5C5C\">" + id + "</color> " : id);
                                     }
+                                    GUILayout.Label(string.Join(", ", mJoinList.ToArray()));
+                                    GUILayout.EndHorizontal();
                                 }
                                 else if (!string.IsNullOrEmpty(mods[i].CustomRequirements))
                                 {
@@ -648,11 +660,15 @@ namespace UnityModManagerNet
                                         {
                                             mods[i].OnGUI(mods[i]);
                                         }
+                                        //catch (ExitGUIException e)
+                                        //{
+                                        //    throw e;
+                                        //}
                                         catch (Exception e)
                                         {
-                                            mods[i].Logger.Error("OnGUI: " + e.GetType().Name + " - " + e.Message);
-                                            Debug.LogException(e);
+                                            mods[i].Logger.LogException("OnGUI", e);
                                             ShowModSettings = -1;
+                                            GUIUtility.ExitGUI();
                                         }
                                     }
                                 }
@@ -750,8 +766,8 @@ namespace UnityModManagerNet
                             GUILayout.BeginVertical("box");
 
                             GUILayout.BeginHorizontal();
-                            GUILayout.Label("Hotkey", GUILayout.ExpandWidth(false));
-                            ToggleGroup(Params.ShortcutKeyId, mHotkeyNames, i => { Params.ShortcutKeyId = i; }, null, GUILayout.ExpandWidth(false));
+                            GUILayout.Label("Hotkey (default Ctrl+F10)", GUILayout.ExpandWidth(false));
+                            DrawKeybinding(ref Params.Hotkey, "UMMHotkey", null, GUILayout.ExpandWidth(false));
                             GUILayout.EndHorizontal();
 
                             GUILayout.Space(5);
@@ -883,6 +899,7 @@ namespace UnityModManagerNet
                             Cursor.lockState = CursorLockMode.Locked;
                         }
                     }
+                    GameScripts.OnToggleWindow(open);
                 }
                 catch (Exception e)
                 {
@@ -896,16 +913,19 @@ namespace UnityModManagerNet
             {
                 if (value)
                 {
-                    mCanvas = new GameObject("", typeof(Canvas), typeof(GraphicRaycaster));
-                    mCanvas.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
-                    mCanvas.GetComponent<Canvas>().sortingOrder = Int16.MaxValue;
+                    mCanvas = new GameObject("UMM blocking UI", typeof(Canvas), typeof(GraphicRaycaster));
+                    var canvas = mCanvas.GetComponent<Canvas>();
+                    canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                    canvas.sortingOrder = Int16.MaxValue;
                     DontDestroyOnLoad(mCanvas);
-                    var panel = new GameObject("", typeof(Image));
+                    var panel = new GameObject("Image", typeof(Image));
                     panel.transform.SetParent(mCanvas.transform);
-                    panel.GetComponent<RectTransform>().anchorMin = new Vector2(1, 0);
-                    panel.GetComponent<RectTransform>().anchorMax = new Vector2(0, 1);
-                    panel.GetComponent<RectTransform>().offsetMin = Vector2.zero;
-                    panel.GetComponent<RectTransform>().offsetMax = Vector2.zero;
+                    var rect = panel.GetComponent<RectTransform>();
+                    rect.anchorMin = new Vector2(0, 0);
+                    rect.anchorMax = new Vector2(1, 1);
+                    rect.offsetMin = Vector2.zero;
+                    rect.offsetMax = Vector2.zero;
+                    panel.GetComponent<Image>().color = new Color(0, 0, 0, 0.3f);
                 }
                 else
                 {
@@ -948,7 +968,6 @@ namespace UnityModManagerNet
                 return true;
             }
         }
-
     }
 }
 

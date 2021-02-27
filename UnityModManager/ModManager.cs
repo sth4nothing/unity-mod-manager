@@ -81,12 +81,20 @@ namespace UnityModManagerNet
 
             public static void Save<T>(T data, ModEntry modEntry) where T : ModSettings, new()
             {
+                Save<T>(data, modEntry, null);
+            }
+
+            /// <summary>
+            /// [0.20.0]
+            /// </summary>
+            public static void Save<T>(T data, ModEntry modEntry, XmlAttributeOverrides attributes) where T : ModSettings, new()
+            {
                 var filepath = data.GetPath(modEntry);
                 try
                 {
                     using (var writer = new StreamWriter(filepath))
                     {
-                        var serializer = new XmlSerializer(typeof(T));
+                        var serializer = new XmlSerializer(typeof(T), attributes);
                         serializer.Serialize(writer, data);
                     }
                 }
@@ -121,6 +129,31 @@ namespace UnityModManagerNet
 
                 return t;
             }
+
+            public static T Load<T>(ModEntry modEntry, XmlAttributeOverrides attributes) where T : ModSettings, new()
+            {
+                var t = new T();
+                var filepath = t.GetPath(modEntry);
+                if (File.Exists(filepath))
+                {
+                    try
+                    {
+                        using (var stream = File.OpenRead(filepath))
+                        {
+                            var serializer = new XmlSerializer(typeof(T), attributes);
+                            var result = (T)serializer.Deserialize(stream);
+                            return result;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        modEntry.Logger.Error($"Can't read {filepath}.");
+                        modEntry.Logger.LogException(e);
+                    }
+                }
+
+                return t;
+            }
         }
 
         public class ModInfo : IEquatable<ModInfo>
@@ -138,6 +171,8 @@ namespace UnityModManagerNet
             public string GameVersion;
 
             public string[] Requirements;
+
+            public string[] LoadAfter;
 
             public string AssemblyName;
 
@@ -216,6 +251,11 @@ namespace UnityModManagerNet
             public readonly Dictionary<string, Version> Requirements = new Dictionary<string, Version>();
 
             /// <summary>
+            /// List of mods after which this mod should be loaded [0.22.5]
+            /// </summary>
+            public readonly List<string> LoadAfter = new List<string>();
+
+            /// <summary>
             /// Displayed in UMM UI. Add <color></color> tag to change colors. Can be used when custom verification game version [0.15.0]
             /// </summary>
             public string CustomRequirements = String.Empty;
@@ -245,9 +285,14 @@ namespace UnityModManagerNet
             public Func<ModEntry, bool, bool> OnToggle = null;
 
             /// <summary>
-            /// Called by MonoBehaviour.OnGUI
+            /// Called by MonoBehaviour.OnGUI when mod options are visible.
             /// </summary>
             public Action<ModEntry> OnGUI = null;
+
+            /// <summary>
+            /// Called by MonoBehaviour.OnGUI, always [0.21.0]
+            /// </summary>
+            public Action<ModEntry> OnFixedGUI = null;
 
             /// <summary>
             /// Called when opening mod GUI [0.16.0]
@@ -304,13 +349,12 @@ namespace UnityModManagerNet
             public bool Loaded => Assembly != null;
 
             bool mFirstLoading = true;
+            int mReloaderCount = 0;
 
             bool mActive = false;
-            public bool Active
-            {
+            public bool Active {
                 get => mActive;
-                set
-                {
+                set {
                     if (value && !Loaded)
                     {
                         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -338,6 +382,7 @@ namespace UnityModManagerNet
                             else
                             {
                                 this.Logger.Log($"Unsuccessfully.");
+                                this.Logger.NativeLog($"OnToggle(true) failed.");
                             }
                         }
                         else if (!forbidDisableMods)
@@ -350,6 +395,10 @@ namespace UnityModManagerNet
                                 mActive = false;
                                 this.Logger.Log($"Inactive.");
                                 GameScripts.OnModToggle(this, false);
+                            }
+                            else if (OnToggle != null)
+                            {
+                                this.Logger.NativeLog($"OnToggle(false) failed.");
                             }
                         }
                     }
@@ -366,12 +415,12 @@ namespace UnityModManagerNet
                 Path = path;
                 Logger = new ModLogger(Info.Id);
                 Version = ParseVersion(info.Version);
-                ManagerVersion = !string.IsNullOrEmpty(info.ManagerVersion) ? ParseVersion(info.ManagerVersion) : new Version();
+                ManagerVersion = !string.IsNullOrEmpty(info.ManagerVersion) ? ParseVersion(info.ManagerVersion) : !string.IsNullOrEmpty(Config.MinimalManagerVersion) ? ParseVersion(Config.MinimalManagerVersion) : new Version();
                 GameVersion = !string.IsNullOrEmpty(info.GameVersion) ? ParseVersion(info.GameVersion) : new Version();
 
                 if (info.Requirements != null && info.Requirements.Length > 0)
                 {
-                    var regex = new Regex(@"(.*)-(\d\.\d\.\d).*");
+                    var regex = new Regex(@"(.*)-(\d+\.\d+\.\d+).*");
                     foreach (var id in info.Requirements)
                     {
                         var match = regex.Match(id);
@@ -383,6 +432,11 @@ namespace UnityModManagerNet
                         if (!Requirements.ContainsKey(id))
                             Requirements.Add(id, null);
                     }
+                }
+
+                if (info.LoadAfter != null && info.LoadAfter.Length > 0)
+                {
+                    LoadAfter.AddRange(info.LoadAfter);
                 }
             }
 
@@ -453,16 +507,38 @@ namespace UnityModManagerNet
                     }
                 }
 
+                if (LoadAfter.Count > 0)
+                {
+                    foreach (var id in LoadAfter)
+                    {
+                        var mod = FindMod(id);
+                        if (mod == null)
+                        {
+                            this.Logger.Log($"Optional mod '{id}' not found.");
+                            continue;
+                        }
+
+                        if (!mod.Active && mod.Enabled)
+                        {
+                            mod.Active = true;
+                            if (!mod.Active)
+                                this.Logger.Log($"Optional mod '{id}' enabled, but inactive.");
+                        }
+                    }
+                }
+
                 if (mErrorOnLoading)
                     return false;
 
                 string assemblyPath = System.IO.Path.Combine(Path, Info.AssemblyName);
-                
+                string pdbPath = assemblyPath.Replace(".dll", ".pdb");
+
                 if (File.Exists(assemblyPath))
                 {
                     try
                     {
                         var assemblyCachePath = assemblyPath;
+                        var pdbCachePath = pdbPath;
                         var cacheExists = false;
 
                         if (mFirstLoading)
@@ -470,11 +546,12 @@ namespace UnityModManagerNet
                             var fi = new FileInfo(assemblyPath);
                             var hash = (ushort)((long)fi.LastWriteTimeUtc.GetHashCode() + version.GetHashCode() + ManagerVersion.GetHashCode()).GetHashCode();
                             assemblyCachePath = assemblyPath + $".{hash}.cache";
+                            pdbCachePath = assemblyCachePath + ".pdb";
                             cacheExists = File.Exists(assemblyCachePath);
 
                             if (!cacheExists)
                             {
-                                foreach (var filepath in Directory.GetFiles(Path, "*.cache"))
+                                foreach (var filepath in Directory.GetFiles(Path, "*.cache*"))
                                 {
                                     try
                                     {
@@ -493,10 +570,30 @@ namespace UnityModManagerNet
                             {
                                 if (!cacheExists)
                                 {
-                                    File.Copy(assemblyPath, assemblyCachePath, true);
+                                    bool hasChanges = false;
+                                    var modDef = ModuleDefMD.Load(File.ReadAllBytes(assemblyPath));
+                                    foreach (var item in modDef.GetAssemblyRefs())
+                                    {
+                                        if (item.FullName.StartsWith("0Harmony, Version=1."))
+                                        {
+                                            item.Name = "0Harmony-1.2";
+                                            hasChanges = true;
+                                        }
+                                    }
+                                    if (hasChanges)
+                                    {
+                                        modDef.Write(assemblyCachePath);
+                                    }
+                                    else
+                                    {
+                                        File.Copy(assemblyPath, assemblyCachePath, true);
+                                    }
+                                    if (File.Exists(pdbPath))
+                                    {
+                                        File.Copy(pdbPath, pdbCachePath, true);
+                                    }
                                 }
                                 mAssembly = Assembly.LoadFile(assemblyCachePath);
-                                //mAssembly = Assembly.LoadFile(assemblyPath);
 
                                 foreach (var type in mAssembly.GetTypes())
                                 {
@@ -509,7 +606,21 @@ namespace UnityModManagerNet
                             }
                             else
                             {
-                                mAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+                                var modDef = ModuleDefMD.Load(File.ReadAllBytes(assemblyPath));
+                                modDef.Assembly.Name += ++mReloaderCount;
+
+                                using (var buf = new MemoryStream())
+                                {
+                                    modDef.Write(buf);
+                                    if (File.Exists(pdbPath))
+                                    {
+                                        mAssembly = Assembly.Load(buf.ToArray(), File.ReadAllBytes(pdbPath));
+                                    }
+                                    else
+                                    {
+                                        mAssembly = Assembly.Load(buf.ToArray());
+                                    }
+                                }
                             }
                         }
                         else
@@ -528,15 +639,40 @@ namespace UnityModManagerNet
                             //}
                             if (!cacheExists)
                             {
+                                bool hasChanges = false;
                                 var modDef = ModuleDefMD.Load(File.ReadAllBytes(assemblyPath));
                                 foreach (var item in modDef.GetTypeRefs())
                                 {
                                     if (item.FullName == "UnityModManagerNet.UnityModManager")
                                     {
                                         item.ResolutionScope = new AssemblyRefUser(thisModuleDef.Assembly);
+                                        hasChanges = true;
                                     }
                                 }
-                                modDef.Write(assemblyCachePath);
+                                foreach (var item in modDef.GetMemberRefs().Where(member => member.IsFieldRef))
+                                {
+                                    if (item.Name == "modsPath" && item.Class.FullName == "UnityModManagerNet.UnityModManager")
+                                    {
+                                        item.Name = "OldModsPath";
+                                        hasChanges = true;
+                                    }
+                                }
+                                foreach (var item in modDef.GetAssemblyRefs())
+                                {
+                                    if (item.FullName.StartsWith("0Harmony, Version=1."))
+                                    {
+                                        item.Name = "0Harmony-1.2";
+                                        hasChanges = true;
+                                    }
+                                }
+                                if (hasChanges)
+                                {
+                                    modDef.Write(assemblyCachePath);
+                                }
+                                else
+                                {
+                                    File.Copy(assemblyPath, assemblyCachePath, true);
+                                }
                             }
                             mAssembly = Assembly.LoadFile(assemblyCachePath);
                         }
@@ -596,22 +732,6 @@ namespace UnityModManagerNet
                 if (!mStarted || !CanReload)
                     return;
 
-                try
-                {
-                    string assemblyPath = System.IO.Path.Combine(Path, Info.AssemblyName);
-                    var reflAssembly = Assembly.ReflectionOnlyLoad(File.ReadAllBytes(assemblyPath));
-                    if (reflAssembly.GetName().Version == Assembly.GetName().Version)
-                    {
-                        this.Logger.Log("Reload is not needed. The version is exactly the same as the previous one.");
-                        return;
-                    }
-                }
-                catch (Exception e)
-                {
-                    this.Logger.Error(e.ToString());
-                    return;
-                }
-
                 if (OnSaveGUI != null)
                     OnSaveGUI.Invoke(this);
 
@@ -628,14 +748,20 @@ namespace UnityModManagerNet
                 {
                     mActive = false;
                 }
-                
+
                 try
                 {
                     if (!Active && (OnUnload == null || OnUnload.Invoke(this)))
                     {
                         mCache.Clear();
-                        typeof(Harmony12.Traverse).GetField("Cache", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, new Harmony12.AccessCache());
-                        typeof(Harmony.Traverse).GetField("Cache", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, new Harmony.AccessCache());
+                        var AccessCacheType = typeof(HarmonyLib.Traverse).Assembly.GetType("HarmonyLib.AccessCache");
+                        var accessCache = typeof(HarmonyLib.Traverse).GetField("Cache", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                        string[] fields = { "declaredFields", "declaredProperties", "declaredMethods", "inheritedFields", "inheritedProperties", "inheritedMethods" };
+                        foreach (var field in fields)
+                        {
+                            var accessCacheDict = (System.Collections.IDictionary)AccessCacheType.GetField(field, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(accessCache);
+                            accessCacheDict.Clear();
+                        }
 
                         var oldAssembly = Assembly;
                         mAssembly = null;
@@ -644,6 +770,7 @@ namespace UnityModManagerNet
 
                         OnToggle = null;
                         OnGUI = null;
+                        OnFixedGUI = null;
                         OnShowGUI = null;
                         OnHideGUI = null;
                         OnSaveGUI = null;
@@ -773,7 +900,7 @@ namespace UnityModManagerNet
                             if (types == null)
                                 types = new Type[0];
 
-                            methodInfo = type.GetMethod(methodString, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, types, new ParameterModifier[0]);
+                            methodInfo = type.GetMethod(methodString, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, types, null);
                             if (methodInfo == null)
                             {
                                 if (showLog)
@@ -813,6 +940,9 @@ namespace UnityModManagerNet
         public static readonly List<ModEntry> modEntries = new List<ModEntry>();
         public static string modsPath { get; private set; }
 
+        [Obsolete("Please use modsPath!!!!This is compatible with mod of ver before 0.13")]
+        public static string OldModsPath = "";
+
         internal static Param Params { get; set; } = new Param();
         internal static GameInfo Config { get; set; } = new GameInfo();
 
@@ -826,7 +956,8 @@ namespace UnityModManagerNet
 
         static void OnLoad(object sender, AssemblyLoadEventArgs args)
         {
-            if (args.LoadedAssembly.FullName == "Assembly-CSharp, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null")
+            var name = args.LoadedAssembly.GetName().Name;
+            if (name == "Assembly-CSharp" || name == "assembly_valheim")
             {
                 AppDomain.CurrentDomain.AssemblyLoad -= OnLoad;
                 Injector.Run(true);
@@ -843,10 +974,24 @@ namespace UnityModManagerNet
             Logger.Clear();
 
             Logger.Log($"Initialize.");
-            Logger.Log($"Version: '{version}'.");
-            Logger.Log($"OS: {Environment.OSVersion} {Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")}.");
+            Logger.Log($"Version: {version}.");
+            try
+            {
+                Logger.Log($"OS: {Environment.OSVersion} {Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")}.");
+                Logger.Log($"Net Framework: {Environment.Version}.");
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
 
             unityVersion = ParseVersion(Application.unityVersion);
+            Logger.Log($"Unity Engine: {unityVersion}.");
+
+            if (!Assembly.GetExecutingAssembly().Location.Contains($"Managed{Path.DirectorySeparatorChar}UnityModManager"))
+            {
+                Logger.Error(@"The UnityModManager folder must be located only in \Game\*Data\Managed\ directory. This folder is created automatically after installation via UnityModManager.exe.");
+            }
 
             Config = GameInfo.Load();
             if (Config == null)
@@ -859,21 +1004,29 @@ namespace UnityModManagerNet
             Params = Param.Load();
 
             modsPath = Path.Combine(Environment.CurrentDirectory, Config.ModsDirectory);
-
             if (!Directory.Exists(modsPath))
-                Directory.CreateDirectory(modsPath);
+            {
+                var modsPath2 = Path.Combine(Path.GetDirectoryName(Environment.CurrentDirectory), Config.ModsDirectory);
 
-            //SceneManager.sceneLoaded += SceneManager_sceneLoaded; // Incompatible with Unity5
+                if (Directory.Exists(modsPath2))
+                {
+                    modsPath = modsPath2;
+                }
+                else
+                {
+                    Directory.CreateDirectory(modsPath);
+                }
+            }
+
+            Logger.Log($"Mods path: {modsPath}.");
+            OldModsPath = modsPath;
+
+            KeyBinding.Initialize();
 
             AppDomain.CurrentDomain.AssemblyResolve += CurrentDomain_AssemblyResolve;
 
             return true;
         }
-
-        //private static void SceneManager_sceneLoaded(Scene scene, LoadSceneMode mode)
-        //{
-        //    Logger.NativeLog($"Scene loaded: {scene.name} ({mode.ToString()})");
-        //}
 
         private static Assembly CurrentDomain_AssemblyResolve(object sender, ResolveEventArgs args)
         {
@@ -881,24 +1034,32 @@ namespace UnityModManagerNet
             if (assembly != null)
                 return assembly;
 
-            if (args.Name.StartsWith("0Harmony,"))
+            string filename = null;
+            if (args.Name.StartsWith("0Harmony12"))
             {
-                var regex = new Regex(@"Version=(\d+\.\d+)");
-                var match = regex.Match(args.Name);
-                if (match.Success)
+                filename = "0Harmony12.dll";
+            }
+            else if (args.Name.StartsWith("0Harmony, Version=1.") || args.Name.StartsWith("0Harmony-1.2"))
+            {
+                filename = "0Harmony-1.2.dll";
+            }
+            else if (args.Name.StartsWith("0Harmony, Version=2."))
+            {
+                filename = "0Harmony.dll";
+            }
+
+            if (filename != null)
+            {
+                string filepath = Path.Combine(Path.GetDirectoryName(typeof(UnityModManager).Assembly.Location), filename);
+                if (File.Exists(filepath))
                 {
-                    var ver = match.Groups[1].Value;
-                    string filepath = Path.Combine(Path.GetDirectoryName(typeof(UnityModManager).Assembly.Location), $"0Harmony-{ver}.dll");
-                    if (File.Exists(filepath))
+                    try
                     {
-                        try
-                        {
-                            return Assembly.LoadFile(filepath);
-                        }
-                        catch (Exception e)
-                        {
-                            Logger.Error(e.ToString());
-                        }
+                        return Assembly.LoadFile(filepath);
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.Error(e.ToString());
                     }
                 }
             }
@@ -935,52 +1096,7 @@ namespace UnityModManagerNet
 
             started = true;
 
-            if (!string.IsNullOrEmpty(Config.GameVersionPoint))
-            {
-                try
-                {
-                    Logger.Log($"Start parsing game version.");
-                    if (Injector.TryParseEntryPoint(Config.GameVersionPoint, out var assembly, out var className, out var methodName, out _))
-                    {
-                        var asm = Assembly.Load(assembly);
-                        if (asm == null)
-                        {
-                            Logger.Error($"File '{assembly}' not found.");
-                            goto Next;
-                        }
-                        var foundClass = asm.GetType(className);
-                        if (foundClass == null)
-                        {
-                            Logger.Error($"Class '{className}' not found.");
-                            goto Next;
-                        }
-                        var foundMethod = foundClass.GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                        if (foundMethod == null)
-                        {
-                            var foundField = foundClass.GetField(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                            if (foundField != null)
-                            {
-                                gameVersion = ParseVersion(foundField.GetValue(null).ToString());
-                                Logger.Log($"Game version detected as '{gameVersion}'.");
-                                goto Next;
-                            }
-
-                            UnityModManager.Logger.Error($"Method '{methodName}' not found.");
-                            goto Next;
-                        }
-
-                        gameVersion = ParseVersion(foundMethod.Invoke(null, null).ToString());
-                        Logger.Log($"Game version detected as '{gameVersion}'.");
-                    }
-                }
-                catch (Exception e)
-                {
-                    Debug.LogException(e);
-                    OpenUnityFileLog();
-                }
-            }
-
-            Next:
+            ParseGameVersion();
 
             GameScripts.Init();
 
@@ -1007,7 +1123,8 @@ namespace UnityModManagerNet
                         Logger.Log($"Reading file '{jsonPath}'.");
                         try
                         {
-                            ModInfo modInfo = JsonUtility.FromJson<ModInfo>(File.ReadAllText(jsonPath));
+                            //ModInfo modInfo = JsonUtility.FromJson<ModInfo>(File.ReadAllText(jsonPath));
+                            ModInfo modInfo = TinyJson.JSONParser.FromJson<ModInfo>(File.ReadAllText(jsonPath));
                             if (string.IsNullOrEmpty(modInfo.Id))
                             {
                                 Logger.Error($"Id is null.");
@@ -1059,7 +1176,22 @@ namespace UnityModManagerNet
 
                 Logger.Log($"Finish. Successful loaded {modEntries.Count(x => !x.ErrorOnLoading)}/{countMods} mods.".ToUpper());
                 Console.WriteLine();
+
+                var assemblies = AppDomain.CurrentDomain.GetAssemblies().Where(x => x.ManifestModule.Name == "UnityModManager.dll");
+                if (assemblies.Count() > 1)
+                {
+                    Logger.Error($"Detected extra copies of UMM.");
+                    foreach (var ass in assemblies)
+                    {
+                        Logger.Log($"- {ass.CodeBase}");
+                    }
+                    Console.WriteLine();
+                }
                 Console.WriteLine();
+            }
+            else
+            {
+                Logger.Log($"Directory '{modsPath}' not exists.");
             }
 
             GameScripts.OnAfterLoadMods();
@@ -1070,6 +1202,131 @@ namespace UnityModManagerNet
             }
         }
 
+        private static void ParseGameVersion()
+        {
+            if (string.IsNullOrEmpty(Config.GameVersionPoint)) return;
+
+            try
+            {
+                Logger.Log("Start parsing game version.");
+
+                var version = TryGetValueFromDllPoint(Config.GameVersionPoint)?.ToString();
+                if (version == null) return;
+
+                Logger.Log($"Found game version string: '{version}'.");
+
+                gameVersion = ParseVersion(version);
+                Logger.Log($"Game version detected as '{gameVersion}'.");
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                OpenUnityFileLog();
+            }
+        }
+
+        private static object TryGetValueFromDllPoint(string point)
+        {
+            var regex = new Regex(@"^\[(.+\.dll)\](\w+)((?:\.\w+(?:\(\))?)+)$", RegexOptions.IgnoreCase);
+            var match = regex.Match(point);
+
+            if (!match.Success)
+            {
+                Logger.Error($"Malformed DLL point: '{point}'");
+                return null;
+            }
+
+            var dll = match.Groups[1].Value;
+            var path = match.Groups[2].Value;
+            var subpaths = match.Groups[3].Value.Trim('.').Split('.');
+
+            var asm = Assembly.Load(dll);
+            if (asm == null)
+            {
+                Logger.Error($"File '{dll}' not found.");
+                return null;
+            }
+
+            Type cls = asm.GetType(path);
+            var i = 0;
+
+            for (; i < subpaths.Length; i++)
+            {
+                var pathElement = subpaths[i];
+
+                if (pathElement.EndsWith("()")) break;
+
+                path += "." + pathElement;
+                var newCls = asm.GetType(path);
+                if (newCls != null) cls = newCls;
+                else if (cls != null) break;
+            }
+
+            if (cls == null)
+            {
+                Logger.Error($"No class found at '{path}'");
+                return null;
+            }
+            else if (i == subpaths.Length)
+            {
+                Logger.Error($"Could not provide a value because '{path}' is a type");
+                return null;
+            }
+
+            object instance = null;
+
+            for (var first = i; i < subpaths.Length; i++)
+            {
+                var pathElement = subpaths[i];
+
+                if (pathElement.EndsWith("()"))
+                {
+                    pathElement = pathElement.Substring(0, pathElement.Length - 2);
+                }
+
+                if (!GetValueFromMember(cls, ref instance, pathElement, i == first)) return null;
+
+                if (instance == null)
+                {
+                    Logger.Error($"'{cls.FullName}.{pathElement}' returned null");
+                    return null;
+                }
+
+                cls = instance.GetType();
+            }
+
+            return instance;
+        }
+
+        private static bool GetValueFromMember(Type cls, ref object instance, string name, bool _static)
+        {
+            var flags = BindingFlags.Public | BindingFlags.NonPublic | (_static ? BindingFlags.Static : BindingFlags.FlattenHierarchy | BindingFlags.Instance);
+
+            var field = cls.GetField(name, flags);
+            if (field != null)
+            {
+                instance = field.GetValue(instance);
+                return true;
+            }
+
+            var property = cls.GetProperty(name, flags);
+            if (property != null)
+            {
+                instance = property.GetValue(instance, null);
+                return true;
+            }
+
+            var method = cls.GetMethod(name, flags, null, Type.EmptyTypes, null);
+            if (method != null)
+            {
+                instance = method.Invoke(instance, null);
+                return true;
+            }
+
+            Logger.Error($"Class '{cls.FullName}' does not have a {(_static ? "static" : "non-static")} member '{name}'");
+            return false;
+        }
+
         private static void DFS(string id, Dictionary<string, ModEntry> mods)
         {
             if (modEntries.Any(m => m.Info.Id == id))
@@ -1078,7 +1335,13 @@ namespace UnityModManagerNet
             }
             foreach (var req in mods[id].Requirements.Keys)
             {
-                DFS(req, mods);
+                if (mods.ContainsKey(req))
+                    DFS(req, mods);
+            }
+            foreach (var req in mods[id].LoadAfter)
+            {
+                if (mods.ContainsKey(req))
+                    DFS(req, mods);
             }
             modEntries.Add(mods[id]);
         }

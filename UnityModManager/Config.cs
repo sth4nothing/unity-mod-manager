@@ -19,7 +19,9 @@ namespace UnityModManagerNet
                 public bool Enabled = true;
             }
 
-            public int ShortcutKeyId = 0;
+            public static KeyBinding DefaultHotkey = new KeyBinding { keyCode = KeyCode.F10, modifiers = 1 };
+            public static KeyBinding EscapeHotkey = new KeyBinding { keyCode = KeyCode.Escape };
+            public KeyBinding Hotkey = new KeyBinding();
             public int CheckUpdates = 1;
             public int ShowOnStart = 1;
             public float WindowWidth;
@@ -101,6 +103,7 @@ namespace UnityModManagerNet
             public string UIStartingPoint;
             public string GameExe;
             public string GameVersionPoint;
+            public string MinimalManagerVersion;
 
             static readonly string filepath = Path.Combine(Path.GetDirectoryName(typeof(GameInfo).Assembly.Location), "Config.xml");
 

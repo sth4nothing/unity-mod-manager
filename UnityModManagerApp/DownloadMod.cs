@@ -7,22 +7,21 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace UnityModManagerNet.Installer
 {
-    public partial class DownloadForm : Form
+    public partial class DownloadMod : Form
     {
         public UnityModManager.Repository.Release release;
         public string tempFilepath { get; private set; }
 
-        public DownloadForm()
+        public DownloadMod()
         {
             InitializeComponent();
         }
 
-        public DownloadForm(UnityModManager.Repository.Release release)
+        public DownloadMod(UnityModManager.Repository.Release release)
         {
             this.release = release;
             InitializeComponent();

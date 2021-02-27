@@ -14,6 +14,7 @@ namespace UnityModManagerNet.Installer
 
         private void InitPageMods()
         {
+            btnModInstall.Click += btnModInstall_Click;
             splitContainerModsInstall.Panel2.AllowDrop = true;
             splitContainerModsInstall.Panel2.DragEnter += new DragEventHandler(Mods_DragEnter);
             splitContainerModsInstall.Panel2.DragDrop += new DragEventHandler(Mods_DragDrop);
@@ -513,7 +514,7 @@ namespace UnityModManagerNet.Installer
                     var release = repositories[selectedGame].FirstOrDefault(x => x.Id == modInfo.Id);
                     if (release != null && !string.IsNullOrEmpty(release.DownloadUrl) && !string.IsNullOrEmpty(release.Version) && modInfo.AvailableVersions.All(x => x.Key < Utils.ParseVersion(release.Version)))
                     {
-                        var downloadForm = new DownloadForm(release);
+                        var downloadForm = new DownloadMod(release);
                         var result = downloadForm.ShowDialog();
                         if (result == DialogResult.OK)
                         {

@@ -26,13 +26,80 @@ namespace UnityModManagerNet
                 }
             }
 
+            public static void OnBeforeLoadMods()
+            {
+                foreach (var o in scripts)
+                {
+                    try
+                    {
+                        o.OnBeforeLoadMods();
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogException("OnBeforeLoadMods", e);
+                    }
+                }
+            }
+
+            public static void OnAfterLoadMods()
+            {
+                foreach (var o in scripts)
+                {
+                    try
+                    {
+                        o.OnAfterLoadMods();
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogException("OnAfterLoadMods", e);
+                    }
+                }
+            }
+
+            public static void OnModToggle(ModEntry modEntry, bool value)
+            {
+                foreach(var o in scripts)
+                {
+                    try
+                    {
+                        o.OnModToggle(modEntry, value);
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogException("OnModToggle", e);
+                    }
+                }
+            }
+
+            public static void OnToggleWindow(bool value)
+            {
+                foreach (var o in scripts)
+                {
+                    try
+                    {
+                        o.OnToggleWindow(value);
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogException("OnToggleWindow", e);
+                    }
+                }
+            }
+
             class GameScript
             {
                 public virtual void OnModToggle(ModEntry modEntry, bool value) { }
                 public virtual void OnBeforeLoadMods() { }
                 public virtual void OnAfterLoadMods() { }
+                /// <summary>
+                /// [0.21.3]
+                /// </summary>
+                public virtual void OnToggleWindow(bool value) { }
             }
 
+            // Insert here a class named as game to execute custom script for a game.
+
+            /*
             class RiskofRain2 : GameScript
             {
                 public override void OnModToggle(ModEntry modEntry, bool value)
@@ -85,51 +152,7 @@ namespace UnityModManagerNet
                     FieldModded.SetValue(null, value);
                 }
             }
-
-            public static void OnBeforeLoadMods()
-            {
-                foreach (var o in scripts)
-                {
-                    try
-                    {
-                        o.OnBeforeLoadMods();
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.LogException("OnBeforeLoadMods", e);
-                    }
-                }
-            }
-
-            public static void OnAfterLoadMods()
-            {
-                foreach (var o in scripts)
-                {
-                    try
-                    {
-                        o.OnAfterLoadMods();
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.LogException("OnAfterLoadMods", e);
-                    }
-                }
-            }
-
-            public static void OnModToggle(ModEntry modEntry, bool value)
-            {
-                foreach(var o in scripts)
-                {
-                    try
-                    {
-                        o.OnModToggle(modEntry, value);
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.LogException("OnModToggle", e);
-                    }
-                }
-            }
+            */
         }
     }
 }

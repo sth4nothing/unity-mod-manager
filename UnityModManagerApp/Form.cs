@@ -5,8 +5,8 @@ using System.Linq;
 using System.Windows.Forms;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
-using System.Text.RegularExpressions;
 using System.Diagnostics;
+using System.Net;
 
 namespace UnityModManagerNet.Installer
 {
@@ -15,24 +15,36 @@ namespace UnityModManagerNet.Installer
     {
         const string REG_PATH = @"HKEY_CURRENT_USER\Software\UnityModManager";
 
+        private static readonly Version VER_0_13 = new Version(0, 13);
+        private static readonly Version VER_0_22 = new Version(0, 22);
+
         public UnityModManagerForm()
         {
             InitializeComponent();
+            Load += UnityModManagerForm_Load;
+        }
+
+        private void UnityModManagerForm_Load(object sender, EventArgs e)
+        {
             Init();
             InitPageMods();
         }
 
-        static readonly string[] libraryFiles = new string[]
+        [Flags]
+        enum LibIncParam { Normal = 0, Minimal_lt_0_22 = 1 }
+
+        static readonly Dictionary<string, LibIncParam> libraryFiles = new Dictionary<string, LibIncParam>
         {
-            "0Harmony12.dll",
-            "0Harmony-1.2.dll",
-            "dnlib.dll",
-            "System.Xml.dll",
-            nameof(UnityModManager) + ".dll",
-            nameof(UnityModManager) + ".xml"
+            { "0Harmony.dll", LibIncParam.Normal },
+            { "0Harmony12.dll", LibIncParam.Minimal_lt_0_22 },
+            { "0Harmony-1.2.dll", LibIncParam.Minimal_lt_0_22 },
+            { "dnlib.dll", LibIncParam.Normal },
+            { "System.Xml.dll", LibIncParam.Normal },
+            { nameof(UnityModManager) + ".dll", LibIncParam.Normal },
+            { nameof(UnityModManager) + ".xml", LibIncParam.Normal },
         };
 
-        static string[] libraryPaths;
+        static List<string> libraryPaths;
 
         public static UnityModManagerForm instance = null;
 
@@ -69,11 +81,22 @@ namespace UnityModManagerNet.Installer
 
         private void Init()
         {
-            FormBorderStyle = FormBorderStyle.FixedDialog;
             instance = this;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            btnRemove.Click += btnRemove_Click;
+            btnInstall.Click += btnInstall_Click;
+            btnRestore.Click += btnRestore_Click;
+            gameList.SelectedIndexChanged += gameList_Changed;
+            btnOpenFolder.Click += btnOpenFolder_Click;
+            btnDownloadUpdate.Click += btnDownloadUpdate_Click;
 
             Log.Init();
 
+#if NET35
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Ssl3 | SecurityProtocolType.Tls;
+#else
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Ssl3 | SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+#endif
             if (!Utils.IsUnixPlatform())
             {
                 foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
@@ -154,6 +177,9 @@ namespace UnityModManagerNet.Installer
 
         private void UnityModLoaderForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            if (config == null)
+                return;
+
             //Properties.Settings.Default.Save();
             param.Sync(config.GameInfo);
             param.Save();
@@ -166,7 +192,6 @@ namespace UnityModManagerNet.Installer
             btnRestore.Enabled = false;
             tabControl.TabPages[1].Enabled = false;
             installedVersion.Text = "-";
-            additionallyGroupBox.Visible = false;
 
             foreach (var ctrl in installTypeGroup.Controls)
             {
@@ -192,7 +217,9 @@ namespace UnityModManagerNet.Installer
                 nameof(GameInfo.UIStartingPoint),
                 nameof(GameInfo.OldPatchTarget),
                 nameof(GameInfo.GameVersionPoint),
-                nameof(GameInfo.Additionally)
+                nameof(GameInfo.Comment),
+                nameof(GameInfo.MinimalManagerVersion),
+                nameof(GameInfo.ExtraFilesUrl)
             };
 
             var prefix = (!string.IsNullOrEmpty(gameInfo.Name) ? $"[{gameInfo.Name}]" : "[?]");
@@ -252,7 +279,6 @@ namespace UnityModManagerNet.Installer
 
             btnInstall.Text = "Install";
             btnRestore.Enabled = false;
-            additionallyGroupBox.Visible = false;
 
             gamePath = "";
             if (string.IsNullOrEmpty(selectedGameParams.Path) || !Directory.Exists(selectedGameParams.Path))
@@ -262,7 +288,7 @@ namespace UnityModManagerNet.Installer
                 {
                     InactiveForm();
                     btnOpenFolder.ForeColor = System.Drawing.Color.FromArgb(192, 0, 0);
-                    btnOpenFolder.Text = "Select Game Folder";
+                    btnOpenFolder.Text = "Select";
                     folderBrowserDialog.SelectedPath = null;
                     Log.Print($"Game folder '{selectedGame.Folder}' not found.");
                     return;
@@ -278,13 +304,32 @@ namespace UnityModManagerNet.Installer
                 return;
             }
 
+            if (Utils.IsMacPlatform() && !selectedGameParams.Path.EndsWith(".app"))
+            {
+                InactiveForm();
+                Log.Print("Select the game folder where name ending with '.app'.");
+                return;
+            }
+
             Utils.TryParseEntryPoint(selectedGame.EntryPoint, out var assemblyName);
 
             gamePath = selectedGameParams.Path;
             btnOpenFolder.ForeColor = System.Drawing.Color.Black;
             btnOpenFolder.Text = new DirectoryInfo(gamePath).Name;
             folderBrowserDialog.SelectedPath = gamePath;
+            if (File.Exists(Path.Combine(gamePath, "GameAssembly.dll")))
+            {
+                InactiveForm();
+                Log.Print("This game version (IL2CPP) is not supported.");
+                return;
+            }
             managedPath = FindManagedFolder(gamePath);
+            if (managedPath == null)
+            {
+                InactiveForm();
+                Log.Print("Select the game folder that contains the 'Data' folder.");
+                return;
+            }
             managerPath = Path.Combine(managedPath, nameof(UnityModManager));
             entryAssemblyPath = Path.Combine(managedPath, assemblyName);
             injectedEntryAssemblyPath = entryAssemblyPath;
@@ -295,15 +340,34 @@ namespace UnityModManagerNet.Installer
             injectedAssemblyDef = null;
             managerDef = null;
 
-            gameExePath = !string.IsNullOrEmpty(selectedGame.GameExe) ? Path.Combine(gamePath, selectedGame.GameExe) : string.Empty;
+            if (!string.IsNullOrEmpty(selectedGame.GameExe))
+            {
+                if (selectedGame.GameExe.Contains('*'))
+                {
+                    foreach (var file in new DirectoryInfo(gamePath).GetFiles(selectedGame.GameExe, SearchOption.TopDirectoryOnly))
+                    {
+                        selectedGame.GameExe = file.Name;
+                    }
+                }
+                gameExePath = Path.Combine(gamePath, selectedGame.GameExe);
+            }
+            else
+            {
+                gameExePath = string.Empty;
+            }
 
             doorstopPath = Path.Combine(gamePath, doorstopFilename);
             doorstopConfigPath = Path.Combine(gamePath, doorstopConfigFilename);
 
-            libraryPaths = new string[libraryFiles.Length];
-            for (int i = 0; i < libraryFiles.Length; i++)
+            var gameSupportVersion = !string.IsNullOrEmpty(selectedGame.MinimalManagerVersion) ? Utils.ParseVersion(selectedGame.MinimalManagerVersion) : VER_0_22;
+            libraryPaths = new List<string>();
+            foreach (var item in libraryFiles)
             {
-                libraryPaths[i] = Path.Combine(managerPath, libraryFiles[i]);
+                if ((item.Value & LibIncParam.Minimal_lt_0_22) > 0 && gameSupportVersion >= VER_0_22)
+                {
+                    continue;
+                }
+                libraryPaths.Add(Path.Combine(managerPath, item.Key));
             }
 
             var parent = new DirectoryInfo(Application.StartupPath).Parent;
@@ -346,7 +410,7 @@ namespace UnityModManagerNet.Installer
             catch (Exception e)
             {
                 InactiveForm();
-                Log.Print(e.ToString());
+                Log.Print(e.ToString() + Environment.NewLine + entryAssemblyPath);
                 return;
             }
 
@@ -391,7 +455,7 @@ namespace UnityModManagerNet.Installer
             catch (Exception e)
             {
                 InactiveForm();
-                Log.Print(e.ToString());
+                Log.Print(e.ToString() + Environment.NewLine + injectedEntryAssemblyPath + Environment.NewLine + managerAssemblyPath);
                 return;
             }
 
@@ -517,12 +581,6 @@ namespace UnityModManagerNet.Installer
                 btnInstall.Enabled = true;
                 btnRemove.Enabled = false;
             }
-
-            if (!string.IsNullOrEmpty(selectedGame.Additionally))
-            {
-                notesTextBox.Text = selectedGame.Additionally;
-                additionallyGroupBox.Visible = true;
-            }
         }
 
         //private void btnRunGame_SizeChanged(object sender, EventArgs e)
@@ -545,7 +603,7 @@ namespace UnityModManagerNet.Installer
             {
                 disks = new string[] { Environment.GetEnvironmentVariable("HOME") };
                 roots = new string[] { "Library/Application Support", ".steam" };
-                folders = new string[] { "Steam/SteamApps/common", "steam/steamapps/common" };
+                folders = new string[] { "Steam/SteamApps/common", "steam/steamapps/common", "Steam/steamapps/common" };
             }
             foreach (var disk in disks)
             {
@@ -558,6 +616,17 @@ namespace UnityModManagerNet.Installer
                         path = Path.Combine(path, str);
                         if (Directory.Exists(path))
                         {
+                            if (Utils.IsMacPlatform())
+                            {
+                                foreach (var dir in Directory.GetDirectories(path))
+                                {
+                                    if (dir.EndsWith(".app"))
+                                    {
+                                        path = Path.Combine(path, dir);
+                                        break;
+                                    }
+                                }
+                            }
                             return path;
                         }
                     }
@@ -566,36 +635,36 @@ namespace UnityModManagerNet.Installer
             return null;
         }
 
-        private string FindManagedFolder(string str)
+        private string FindManagedFolder(string path)
         {
-            if (Environment.OSVersion.Platform == PlatformID.Unix)
+            if (Utils.IsMacPlatform())
             {
-                var appName = $"{Path.GetFileName(str)}.app";
-                if (!Directory.Exists(Path.Combine(str, appName)))
+                var dir = $"{path}/Contents/Resources/Data/Managed";
+                if (Directory.Exists(dir))
                 {
-                    appName = Directory.GetDirectories(str).FirstOrDefault(dir => dir.EndsWith(".app"));
-                }
-                var path = Path.Combine(str, $"{appName}/Contents/Resources/Data/Managed");
-                if (Directory.Exists(path))
-                {
-                    return path;
+                    return dir;
                 }
             }
-            var regex = new Regex(".*_Data$");
-            var directory = new DirectoryInfo(str);
-            foreach (var dir in directory.GetDirectories())
+
+            foreach (var di in new DirectoryInfo(path).GetDirectories())
             {
-                var match = regex.Match(dir.Name);
-                if (match.Success)
+                if ((di.Attributes & System.IO.FileAttributes.ReparsePoint) != 0)
+                    continue;
+
+                var dir = di.FullName;
+                if (dir.EndsWith("Managed"))
                 {
-                    var path = Path.Combine(str, $"{dir.Name}{Path.DirectorySeparatorChar}Managed");
-                    if (Directory.Exists(path))
+                    if (File.Exists(Path.Combine(dir, "Assembly-CSharp.dll")) || File.Exists(Path.Combine(dir, "UnityEngine.dll")))
                     {
-                        return path;
+                        return dir;
                     }
                 }
+                var result = FindManagedFolder(dir);
+                if (!string.IsNullOrEmpty(result))
+                    return result;
             }
-            return str;
+
+            return null;
         }
 
         private void btnRemove_Click(object sender, EventArgs e)
@@ -702,6 +771,11 @@ namespace UnityModManagerNet.Installer
 
         private void gameList_Changed(object sender, EventArgs e)
         {
+            notesTextBox.Text = "";
+            additionallyGroupBox.Visible = false;
+            extraFilesTextBox.Text = "";
+            extraFilesGroupBox.Visible = false;
+
             var selected = (GameInfo)((ComboBox)sender).SelectedItem;
             if (selected != null)
             {
@@ -710,6 +784,18 @@ namespace UnityModManagerNet.Installer
                 selectedGameParams = param.GetGameParam(selected);
                 if (!string.IsNullOrEmpty(selectedGameParams.Path))
                     Log.Print($"Game path '{selectedGameParams.Path}'.");
+
+                if (!string.IsNullOrEmpty(selected.Comment))
+                {
+                    notesTextBox.Text = selected.Comment;
+                    additionallyGroupBox.Visible = true;
+                }
+                
+                if (!string.IsNullOrEmpty(selected.ExtraFilesUrl))
+                {
+                    extraFilesTextBox.Text = $"Click on the Manual and unzip archive to game folder. Or click on the Auto for automatic installation. This must be done before installing mod loader to game.";
+                    extraFilesGroupBox.Visible = true;
+                }
             }
 
             RefreshForm();
@@ -1249,10 +1335,9 @@ namespace UnityModManagerNet.Installer
                 Log.Print($"Deleting files from game...");
             }
 
-            for (int i = 0; i < libraryPaths.Length; i++)
+            foreach(var path in libraryPaths)
             {
-                var filename = libraryFiles[i];
-                var path = libraryPaths[i];
+                var filename = Path.GetFileName(path);
                 if (action == Actions.Install)
                 {
                     if (File.Exists(path))
@@ -1319,6 +1404,26 @@ namespace UnityModManagerNet.Installer
         private void notesTextBox_LinkClicked(object sender, LinkClickedEventArgs e)
         {
             Process.Start(e.LinkText);
+        }
+
+        private void extraFilesAutoButton_Click(object sender, EventArgs e)
+        {
+            if (!string.IsNullOrEmpty(selectedGame.ExtraFilesUrl))
+            {
+                var form = new DownloadExtraFiles(selectedGame.ExtraFilesUrl, gamePath);
+                var result = form.ShowDialog();
+                if (result == DialogResult.OK)
+                {
+                }
+            }
+        }
+
+        private void extraFilesManualButton_Click(object sender, EventArgs e)
+        {
+            if (!string.IsNullOrEmpty(selectedGame.ExtraFilesUrl))
+            {
+                Process.Start(selectedGame.ExtraFilesUrl);
+            }
         }
     }
 }

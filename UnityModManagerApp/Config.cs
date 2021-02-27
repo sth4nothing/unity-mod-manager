@@ -63,9 +63,14 @@ namespace UnityModManagerNet.Installer
         public string StartingPoint;
         public string UIStartingPoint;
         public string GameVersionPoint;
+        public string MinimalManagerVersion;
         public string OldPatchTarget;
-        public string Additionally;
+        /// <summary>
+        /// [0.21.8]
+        /// </summary>
+        public string Comment;
         //public string MachineConfig;
+        public string ExtraFilesUrl;
 
         public override string ToString()
         {
@@ -161,14 +166,43 @@ namespace UnityModManagerNet.Installer
                     {
                         var serializer = new XmlSerializer(typeof(Config));
                         var result = serializer.Deserialize(stream) as Config;
+
+                        foreach(var file in new DirectoryInfo(Application.StartupPath).GetFiles("UnityModManagerConfig*.xml", SearchOption.TopDirectoryOnly))
+                        {
+                            if (file.Name != filename)
+                            {
+                                try
+                                {
+                                    using (var localStream = File.OpenRead(file.Name))
+                                    {
+                                        var localResult = serializer.Deserialize(localStream) as Config;
+                                        if (localResult.GameInfo == null)
+                                            continue;
+                                        var concatanatedArray = new GameInfo[result.GameInfo.Length + localResult.GameInfo.Length];
+                                        result.GameInfo.CopyTo(concatanatedArray, 0);
+                                        localResult.GameInfo.CopyTo(concatanatedArray, result.GameInfo.Length);
+                                        result.GameInfo = concatanatedArray;
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    Log.Print(e.ToString() + Environment.NewLine + file.Name);
+                                }
+                            }
+                        }
+
                         OnDeserialize(result);
                         return result;
                     }
                 }
                 catch (Exception e)
                 {
-                    Log.Print(e.ToString());
+                    Log.Print(e.ToString() + Environment.NewLine + filename);
                 }
+            }
+            else
+            {
+                Log.Print($"'{filename}' not found.");
             }
             return null;
         }
@@ -210,11 +244,11 @@ namespace UnityModManagerNet.Installer
             }
             return result;
         }
-    
+
         public void Sync(GameInfo[] gameInfos)
         {
             int i = 0;
-            while(i < GameParams.Count)
+            while (i < GameParams.Count)
             {
                 if (gameInfos.Any(x => x.Name == GameParams[i].Name))
                 {
@@ -240,7 +274,7 @@ namespace UnityModManagerNet.Installer
             }
             catch (Exception e)
             {
-                Log.Print(e.ToString());
+                Log.Print(e.ToString() + Environment.NewLine + path);
             }
         }
 
@@ -259,12 +293,12 @@ namespace UnityModManagerNet.Installer
                 }
                 catch (Exception e)
                 {
-                    Log.Print(e.ToString());
+                    Log.Print(e.ToString() + Environment.NewLine + path);
                 }
             }
             return new Param();
         }
     }
 
-    
+
 }

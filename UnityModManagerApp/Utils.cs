@@ -213,6 +213,18 @@ namespace UnityModManagerNet.Installer
             return (p == 4) || (p == 6) || (p == 128);
         }
 
+        public static bool IsMacPlatform()
+        {
+            int p = (int)Environment.OSVersion.Platform;
+            return (p == 6);
+        }
+
+        public static bool IsLinuxPlatform()
+        {
+            int p = (int)Environment.OSVersion.Platform;
+            return (p == 4) || (p == 128);
+        }
+
         public static bool MakeBackup(string path)
         {
             try
@@ -231,7 +243,7 @@ namespace UnityModManagerNet.Installer
             return true;
         }
 
-        public static bool MakeBackup(string[] arr)
+        public static bool MakeBackup(List<string> arr)
         {
             try
             {
@@ -271,7 +283,7 @@ namespace UnityModManagerNet.Installer
             return true;
         }
 
-        public static bool RestoreBackup(string[] arr)
+        public static bool RestoreBackup(List<string> arr)
         {
             try
             {
@@ -312,7 +324,7 @@ namespace UnityModManagerNet.Installer
             return true;
         }
 
-        public static bool DeleteBackup(string[] arr)
+        public static bool DeleteBackup(List<string> arr)
         {
             try
             {

@@ -7,6 +7,7 @@ namespace UnityModManagerNet.Installer
     {
         private static bool firstLine = true;
         public const string fileLog = "Log.txt";
+        static StreamWriter stream;
 
         public static void Print(string str, bool append = false)
         {
@@ -29,19 +30,9 @@ namespace UnityModManagerNet.Installer
                     str = $"\r\n[{DateTime.Now.ToShortTimeString()}] {str}";
                 }
             }
-            
-            UnityModManagerForm.instance.inputLog.AppendText(str);
 
-            try
-            {
-                using (StreamWriter writer = File.AppendText(fileLog))
-                {
-                    writer.Write(str);
-                }
-            }
-            catch (Exception e)
-            {
-            }
+            stream?.Write(str);
+            UnityModManagerForm.instance.inputLog.AppendText(str);
         }
 
         public static void Append(string str)
@@ -51,7 +42,16 @@ namespace UnityModManagerNet.Installer
 
         public static void Init()
         {
-            File.Delete(fileLog);
+            try
+            {
+                File.Delete(fileLog);
+                stream = new StreamWriter(new FileStream(fileLog, FileMode.OpenOrCreate, FileAccess.Write));
+                stream.AutoFlush = true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Print("Write error, insufficient permissions. Try to run app as administrator.");
+            }
         }
     }
 }
